@@ -1,12 +1,12 @@
 # Sources
-SRC_DIR = . mmio
+SRC_DIR = .
 OBJS = $(foreach dir,$(SRC_DIR),$(subst .c,.o,$(wildcard $(dir)/*.c))) $(foreach dir,$(SRC_DIR),$(subst .cpp,.o,$(wildcard $(dir)/*.cpp)))
 
 # Compiler Settings
 OUTPUT = nrooooooo
 CXXFLAGS = -Wall -g -I. -std=c++17
 CFLAGS = -I. -std=gnu11
-LIBS = -lpthread -lunicorn -liberty -lstdc++fs
+LIBS = -lpthread -lunicorn -liberty
 CC = gcc
 CXX = g++
 ifeq ($(OS),Windows_NT)
