@@ -6,51 +6,20 @@
 #include <filesystem>
 #include <list>
 #include <elf.h>
-#include <vector>
-#include <map>
+#include <cxxabi.h>
 #include "crc32.h"
+#include "uc_inst.h"
 
-extern "C"
-{
-extern char *
-cplus_demangle (const char *mangled, int options);
-}
-
+int instance_id_cnt = 0;
 std::map<std::string, uint64_t> unresolved_syms;
 std::map<uint64_t, std::string> unresolved_syms_rev;
 std::map<std::string, uint64_t> resolved_syms;
+std::map<std::pair<uint64_t, uint64_t>, uint64_t> function_hashes;
+std::vector<L2CValue> lua_stack;
+std::map<uint64_t, L2CValue*> lua_active_vars;
 
-// memory addresses for different segments
-#define NRO 0x100000000
-#define NRO_SIZE (0x2000000)
-void* nro;
-
-#define IMPORTS 0xEEEE000000000000
-#define IMPORTS_SIZE (0x800000)
-void* imports;
-
-#define HEAP 0xBBBB000000000000
-#define HEAP_SIZE (0x800000)
-void* heap;
-uint64_t heap_size = 0;
-
-#define STACK 0xFFFF000000000000
-#define STACK_SIZE (0x100000)
-void* stack;
-
-bool uc_quit = false;
+bool syms_scanned = false;
 bool trace_code = true;
-
-uc_engine *cores[4];
-uc_context *core_contexts[4];
-bool cores_online[4] = {false, false, false, false};    
-
-
-void** elfs = NULL;
-uint32_t num_elfs = 0;
-
-void** builtin_elfs = NULL;
-uint32_t num_builtin_elfs = 0;
 
 struct nso_header
 {
@@ -64,7 +33,7 @@ struct mod0_header
     uint32_t dynamic;
 };
 
-uint64_t nro_assignsyms(void* base)
+void nro_assignsyms(void* base)
 {
     const Elf64_Dyn* dyn = NULL;
     const Elf64_Rela* rela = NULL;
@@ -72,6 +41,8 @@ uint64_t nro_assignsyms(void* base)
     const char* strtab = NULL;
     uint64_t relasz = 0;
     uint64_t numsyms = 0;
+    
+    if (syms_scanned) return;
     
     struct nso_header* header = (struct nso_header*)base;
     struct mod0_header* modheader = (struct mod0_header*)(base + header->mod);
@@ -100,7 +71,7 @@ uint64_t nro_assignsyms(void* base)
     
     for (int i = 0; i < numsyms; i++)
     {
-        char* demangled = cplus_demangle(strtab + symtab[i].st_name, 0);
+        char* demangled = abi::__cxa_demangle(strtab + symtab[i].st_name, 0, 0, 0);
         printf("%s %llx %x\n", demangled, symtab[i].st_value, symtab[i].st_shndx);
         
         if (symtab[i].st_shndx == 0 && demangled)
@@ -115,8 +86,8 @@ uint64_t nro_assignsyms(void* base)
         }
         free(demangled);
     }
-
-    return 0;
+    
+    syms_scanned = true;
 }
 
 void nro_relocate(void* base)
@@ -186,7 +157,7 @@ void nro_relocate(void* base)
             case R_AARCH64_ABS64:
             {
                 uint64_t* ptr = (uint64_t*)(base + rela->r_offset);
-                char* demangled = cplus_demangle(name, 0);
+                char* demangled = abi::__cxa_demangle(name, 0, 0, 0);
                 
                 if (demangled)
                 {
@@ -209,7 +180,7 @@ void nro_relocate(void* base)
     
     for (int i = 0; i < numsyms; i++)
     {
-        char* demangled = cplus_demangle(strtab + symtab[i].st_name, 0);
+        char* demangled = abi::__cxa_demangle(strtab + symtab[i].st_name, 0, 0, 0);
         printf("%s %llx %x\n", demangled, symtab[i].st_value, symtab[i].st_shndx);
         
         if (symtab[i].st_shndx == 0 && demangled)
@@ -391,17 +362,17 @@ void uc_print_regs(uc_engine *uc)
     printf("\n");
 }
 
-static void hook_code(uc_engine *uc, uint64_t address, uint32_t size, void *user_data)
+void hook_code(uc_engine *uc, uint64_t address, uint32_t size, uc_inst* inst)
 {
     static uint64_t last_pc[2];
 
-    if (last_pc[0] == address && last_pc[0] == last_pc[1] && !uc_quit)
+    if (last_pc[0] == address && last_pc[0] == last_pc[1] && !inst->is_term())
     {
         printf(">>> Hang at 0x%" PRIx64 " ?\n", address);
-        uc_quit = true;
+        inst->set_term();
     }
 
-    if (trace_code && !uc_quit)
+    if (trace_code && !inst->is_term())
     {
         //printf(">>> Tracing instruction at 0x%"PRIx64 ", instruction size = 0x%x\n", address, size);
         //uc_print_regs(uc);
@@ -411,12 +382,12 @@ static void hook_code(uc_engine *uc, uint64_t address, uint32_t size, void *user
     last_pc[0] = address;
 }
 
-static void hook_import(uc_engine *uc, uint64_t address, uint32_t size, void* data)
+void hook_import(uc_engine *uc, uint64_t address, uint32_t size, uc_inst* inst)
 {
     std::string name = unresolved_syms_rev[address];
-    //printf(">>> Import '%s' at %llx, size %x\n", name.c_str(), address, size);
+    printf(">>> Instance Id %u: Import '%s' at %llx, size %x\n", inst->get_id(), name.c_str(), address, size);
     
-    uint64_t args[8];
+    uint64_t args[9];
     uc_reg_read(uc, UC_ARM64_REG_X0, &args[0]);
     uc_reg_read(uc, UC_ARM64_REG_X1, &args[1]);
     uc_reg_read(uc, UC_ARM64_REG_X2, &args[2]);
@@ -425,18 +396,56 @@ static void hook_import(uc_engine *uc, uint64_t address, uint32_t size, void* da
     uc_reg_read(uc, UC_ARM64_REG_X5, &args[5]);
     uc_reg_read(uc, UC_ARM64_REG_X6, &args[6]);
     uc_reg_read(uc, UC_ARM64_REG_X7, &args[7]);
+    uc_reg_read(uc, UC_ARM64_REG_X8, &args[8]);
     
-    if (name == "operator new")
+    if (name == "operator new(unsigned long)")
     {
-        uint64_t alloc = args[0];
-        args[0] = HEAP + heap_size;
+        args[0] = inst->heap_alloc(args[1]);
+    }
+    else if (name == "lib::L2CAgent::sv_set_function_hash(void*, phx::Hash40)")
+    {
+        printf("Instance Id %u: lib::L2CAgent::sv_set_function_hash(0x%llx, 0x%llx, 0x%llx)\n", inst->get_id(), args[0], args[1], args[2]);
         
-        heap_size += alloc;
+        function_hashes[std::pair<uint64_t, uint64_t>(args[0], args[2])] = args[1];
     }
-    else if (name == "lib::L2CAgent::sv_set_function_hash")
+    else if (name == "lib::utility::Variadic::get_format() const")
     {
-        printf("lib::L2CAgent::sv_set_function_hash(0x%llx, 0x%llx, 0x%llx)\n", args[0], args[1], args[2]);
+        args[0] = 0;
     }
+    else if (name == "lib::L2CAgent::clear_lua_stack()")
+    {
+        lua_stack = std::vector<L2CValue>();
+    }
+    else if (name == "app::sv_animcmd::is_excute(lua_State*)")
+    {
+        lua_stack.push_back(L2CValue(true)); //TODO fork?
+    }
+    else if (name == "lib::L2CAgent::pop_lua_stack(int)")
+    {
+        L2CValue* out = (L2CValue*)inst->uc_ptr_to_real_ptr(args[8]);
+        
+        *out = *(lua_stack.end() - 1);
+        lua_stack.pop_back();
+        
+        lua_active_vars[args[8]] = out;
+    }
+    else if (name == "lib::L2CValue::~L2CValue()")
+    {
+        lua_active_vars[args[0]] = nullptr;
+    }
+    else if (name == "lib::L2CValue::operator bool() const")
+    {
+        L2CValue* val = lua_active_vars[args[0]];
+        if (val)
+        {
+            args[0] = 1;//val->as_bool(); //TODO fork
+            uc_reg_write(uc, UC_ARM64_REG_X0, &args[0]);
+            inst->fork_inst();
+            
+            args[0] = 0;
+        }
+    }
+    
     
     uc_reg_write(uc, UC_ARM64_REG_X0, &args[0]);
     uc_reg_write(uc, UC_ARM64_REG_X1, &args[1]);
@@ -446,215 +455,81 @@ static void hook_import(uc_engine *uc, uint64_t address, uint32_t size, void* da
     uc_reg_write(uc, UC_ARM64_REG_X5, &args[5]);
     uc_reg_write(uc, UC_ARM64_REG_X6, &args[6]);
     uc_reg_write(uc, UC_ARM64_REG_X7, &args[7]);
+    uc_reg_write(uc, UC_ARM64_REG_X8, &args[8]);
     
     uint64_t lr;
     uc_reg_read(uc, UC_ARM64_REG_LR, &lr);
     uc_reg_write(uc, UC_ARM64_REG_PC, &lr);
 }
 
-static void hook_memrw(uc_engine *uc, uc_mem_type type, uint64_t addr, int size, int64_t value, void* user_data)
+void hook_memrw(uc_engine *uc, uc_mem_type type, uint64_t addr, int size, int64_t value, uc_inst* inst)
 {
     switch(type) 
     {
         default: break;
         case UC_MEM_READ:
-                 printf(">>> Memory is being READ at 0x%"PRIx64 ", data size = %u\n", addr, size);
+                 printf(">>> Instance Id %u: Memory is being READ at 0x%"PRIx64 ", data size = %u\n", inst->get_id(), addr, size);
                  break;
         case UC_MEM_WRITE:
-                 printf(">>> Memory is being WRITE at 0x%"PRIx64 ", data size = %u, data value = 0x%"PRIx64 "\n", addr, size, value);
+                 printf(">>> Instance Id %u: Memory is being WRITE at 0x%"PRIx64 ", data size = %u, data value = 0x%"PRIx64 "\n", inst->get_id(), addr, size, value);
                  break;
     }
     return;
 }
 
 // callback for tracing memory access (READ or WRITE)
-static bool hook_mem_invalid(uc_engine *uc, uc_mem_type type, uint64_t address, int size, int64_t value, void *user_data)
+bool hook_mem_invalid(uc_engine *uc, uc_mem_type type, uint64_t address, int size, int64_t value, uc_inst* inst)
 {
     switch(type) {
         default:
             // return false to indicate we want to stop emulation
             return false;
         case UC_MEM_READ_UNMAPPED:
-            printf(">>> Missing memory is being READ at 0x%"PRIx64 ", data size = %u, data value = 0x%"PRIx64 "\n", address, size, value);
+            printf(">>> Instance Id %u: Missing memory is being READ at 0x%"PRIx64 ", data size = %u, data value = 0x%"PRIx64 "\n", inst->get_id(), address, size, value);
             //uc_print_regs(uc);
             
             return false;
         case UC_MEM_WRITE_UNMAPPED:        
-            printf(">>> Missing memory is being WRITE at 0x%"PRIx64 ", data size = %u, data value = 0x%"PRIx64 "\n", address, size, value);
+            printf(">>> Instance Id %u: Missing memory is being WRITE at 0x%"PRIx64 ", data size = %u, data value = 0x%"PRIx64 "\n", inst->get_id(), address, size, value);
             //uc_print_regs(uc);
             
             return true;
         case UC_ERR_FETCH_UNMAPPED:
-            printf(">>> Missing memory is being EXEC at 0x%"PRIx64 ", data size = %u, data value = 0x%"PRIx64 "\n", address, size, value);
+            printf(">>> Instance Id %u: Missing memory is being EXEC at 0x%"PRIx64 ", data size = %u, data value = 0x%"PRIx64 "\n", inst->get_id(), address, size, value);
             return false;
         case UC_ERR_EXCEPTION:
-            printf(">>> Exception\n");
+            printf(">>> Instance Id %u: Exception\n", inst->get_id());
             return false;
     }
 }
 
-
-static void uc_reg_init(uc_engine *uc, int core)
+int main(int argc, char **argv, char **envp)
 {
-    uint64_t zero = 0;
-    for (int i = UC_ARM64_REG_PC+1; i < UC_ARM64_REG_ENDING; i++)
-    {
-        zero = 0x0;
-        uc_reg_read(uc, i, &zero);
-    }
+    // lua2cpp::L2CFighterAnimcmdBase
+    uint64_t animcmd_effect, animcmd_expression, animcmd_game, animcmd_sound;
     
-    uint32_t x;
-    uc_reg_read(uc, UC_ARM64_REG_CPACR_EL1, &x);
-    x |= 0x300000; // set FPEN bit
-    uc_reg_write(uc, UC_ARM64_REG_CPACR_EL1, &x);
-}
-
-static uc_err uc_init(uc_engine **uc, int core)
-{
-    uc_err err;
-    uc_hook trace1, trace2, trace3;
-
-    err = uc_open(UC_ARCH_ARM64, UC_MODE_ARM, uc);
-    if (err) {
-        printf("Failed on uc_open() with error returned: %u (%s)\n",
-                err, uc_strerror(err));
-        return err;
-    }
-    
-    uc_reg_init(*uc, core);
-
-    // import hooks    
-    for (auto pair : unresolved_syms)
-    {
-        uc_hook trace;
-        uc_hook_add(*uc, &trace, UC_HOOK_CODE, (void*)hook_import, NULL, pair.second, pair.second);
-    }
-    
-    // granular hooks
-    uc_hook_add(*uc, &trace1, UC_HOOK_CODE, (void*)hook_code, NULL, 1, 0);
-    uc_hook_add(*uc, &trace2, UC_HOOK_MEM_UNMAPPED, (void*)hook_mem_invalid, NULL, 1, 0);
-    //uc_hook_add(*uc, &trace3, UC_HOOK_MEM_WRITE | UC_HOOK_MEM_READ, (void*)hook_memrw, NULL, 1, 0);
-}
-
-static uc_err uc_core_run_slice(uc_engine *uc)
-{
-    uc_err err;
-    uint64_t pc;
-    uc_reg_read(uc, UC_ARM64_REG_PC, &pc);
-    
-    int instrs = 0x10000;
-    
-    // uc cores cannot share mappings, otherwise cores can flush
-    // bad data, so just unmap after each slice has run
-    //TODO proper mappings
-    uc_mem_map_ptr(uc, NRO, NRO_SIZE, UC_PROT_ALL, nro);
-    uc_mem_map_ptr(uc, HEAP, HEAP_SIZE, UC_PROT_ALL, heap);
-    uc_mem_map_ptr(uc, IMPORTS, IMPORTS_SIZE, UC_PROT_ALL, imports);
-    uc_mem_map_ptr(uc, STACK, STACK_SIZE, UC_PROT_ALL, stack); //TODO per-instance!
-    
-    err = uc_emu_start(uc, pc, 0, 0, instrs);
-    if (err) {
-        printf("Failed on uc_emu_start() with error returned: %u\n", err);
-        uc_quit = true;
-    }
-    
-    uc_mem_unmap(uc, STACK, STACK_SIZE);
-    uc_mem_unmap(uc, IMPORTS, IMPORTS_SIZE);
-    uc_mem_unmap(uc, HEAP, HEAP_SIZE);
-    uc_mem_unmap(uc, NRO, NRO_SIZE);
-}
-
-static void uc_run_stuff(uc_engine **cores, uint64_t start)
-{
-    uc_err err = UC_ERR_OK;
-    uint64_t pc = start;
-    uint64_t sp = STACK + STACK_SIZE;
     uint64_t x0, x1, x2, x3;
-    
-    //TODO turn these into speculative execution instances
-    for (int i = 0; i < 4; i++)
-    {
-        uc_init(&cores[i], i);
-    }
-
-    cores_online[0] = true;
-    uc_quit = false;
-    
     x0 = hash40("wolf", 4); // Hash40
     x1 = 0xFFFE000000000000; // BattleObject
     x2 = 0xFFFD000000000000; // BattleObjectModuleAccessor
     x3 = 0xFFFC000000000000; // lua_state
     
-    uc_reg_write(cores[0], UC_ARM64_REG_PC, &pc);
-    uc_reg_write(cores[0], UC_ARM64_REG_SP, &sp);
-    uc_reg_write(cores[0], UC_ARM64_REG_X0, &x0);
-    uc_reg_write(cores[0], UC_ARM64_REG_X1, &x1);
-    uc_reg_write(cores[0], UC_ARM64_REG_X2, &x2);
-    uc_reg_write(cores[0], UC_ARM64_REG_X3, &x3);
-    
-    uint64_t vbar;
-
-    while (!err && !uc_quit)
-    {
-        for (int i = 0; i < 4; i++)
-        {
-            if (!cores_online[i]) break;
-            if (uc_quit) break;
-
-            err = uc_core_run_slice(cores[i]);
-            if (err) break;
-        }
-        if (uc_quit) break;
-        
-        
-    }
-
-    printf(">>> Emulation done. Below is the CPU contexts\n");
-    
-    for (int i = 0; i < 1; i++)
-    {
-        //printf("Core %u:\n", i);
-        uc_print_regs(cores[i]);
-    }
-    
-    for (int i = 0; i < 4; i++)
-    {
-        uc_close(cores[i]);
-    }
-}
-
-static void mem_init()
-{
-    // map and read memory
-    nro = malloc(NRO_SIZE);
-    stack = malloc(STACK_SIZE);
-    heap = malloc(HEAP_SIZE);
-    imports = malloc(IMPORTS_SIZE);
-
-    FILE* f_nro = fopen("lua2cpp_wolf.nro", "rb");
-    fread(nro, NRO_SIZE, 1, f_nro);
-    fclose(f_nro);
-    
-    nro_assignsyms(nro);
-    nro_relocate(nro);
-    
-    // Write in constants
-    memcpy(unresolved_syms["phx::detail::CRC32Table::table_"] - IMPORTS + imports, crc32_tab, sizeof(crc32_tab));
-}
-
-int main(int argc, char **argv, char **envp)
-{
-    mem_init();
+    uc_inst inst = uc_inst();
 
     //TODO read syms
     printf("Running lua2cpp::create_agent_fighter_animcmd_effect_wolf...\n");
-    uc_run_stuff(cores, resolved_syms["lua2cpp::create_agent_fighter_animcmd_effect_wolf"]);
+    animcmd_effect = inst.uc_run_stuff(resolved_syms["lua2cpp::create_agent_fighter_animcmd_effect_wolf(phx::Hash40, app::BattleObject*, app::BattleObjectModuleAccessor*, lua_State*)"], x0, x1, x2, x3);
     printf("Running lua2cpp::create_agent_fighter_animcmd_expression_wolf...\n");
-    uc_run_stuff(cores, resolved_syms["lua2cpp::create_agent_fighter_animcmd_expression_wolf"]);
+    animcmd_expression = inst.uc_run_stuff(resolved_syms["lua2cpp::create_agent_fighter_animcmd_expression_wolf(phx::Hash40, app::BattleObject*, app::BattleObjectModuleAccessor*, lua_State*)"], x0, x1, x2, x3);
     printf("Running lua2cpp::create_agent_fighter_animcmd_game_wolf...\n");
-    uc_run_stuff(cores, resolved_syms["lua2cpp::create_agent_fighter_animcmd_game_wolf"]);
+    animcmd_game = inst.uc_run_stuff(resolved_syms["lua2cpp::create_agent_fighter_animcmd_game_wolf(phx::Hash40, app::BattleObject*, app::BattleObjectModuleAccessor*, lua_State*)"], x0, x1, x2, x3);
     printf("Running lua2cpp::create_agent_fighter_animcmd_sound_wolf...\n");
-    uc_run_stuff(cores, resolved_syms["lua2cpp::create_agent_fighter_animcmd_sound_wolf"]);
+    animcmd_sound = inst.uc_run_stuff(resolved_syms["lua2cpp::create_agent_fighter_animcmd_sound_wolf(phx::Hash40, app::BattleObject*, app::BattleObjectModuleAccessor*, lua_State*)"], x0, x1, x2, x3);
+    
+    uint64_t l2cagent = inst.heap_alloc(0x1000);
+    
+    uint64_t some_func = function_hashes[std::pair<uint64_t, uint64_t>(animcmd_sound, 0x13a0c3d061)];
+    inst.uc_run_stuff(some_func, l2cagent, 0xFFFA000000000000);
 
     return 0;
 }

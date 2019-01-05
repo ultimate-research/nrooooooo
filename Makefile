@@ -6,7 +6,7 @@ OBJS = $(foreach dir,$(SRC_DIR),$(subst .c,.o,$(wildcard $(dir)/*.c))) $(foreach
 OUTPUT = nrooooooo
 CXXFLAGS = -Wall -g -I. -std=c++17
 CFLAGS = -I. -std=gnu11
-LIBS = -lpthread -lunicorn -liberty
+LIBS = -lpthread -lunicorn
 CC = gcc
 CXX = g++
 ifeq ($(OS),Windows_NT)
