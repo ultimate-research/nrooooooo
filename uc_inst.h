@@ -15,6 +15,9 @@
 
 #define STACK 0xFFFF000000000000
 #define STACK_SIZE (0x100000)
+#define STACK_END (STACK + STACK_SIZE)
+
+#define MAGIC_IMPORT 0xF00F1B015
 
 class uc_inst
 {
@@ -27,13 +30,15 @@ private:
     uint64_t heap_size = 0;
     void* stack;
     
+    uc_inst* parent;
     uc_inst* fork;
+    uint64_t fork_divergence = 0;
     
     bool uc_term;
     int instance_id;
 
 public:
-    uc_inst() : fork(nullptr), uc_term(false)
+    uc_inst() : fork(nullptr), parent(nullptr), uc_term(false)
     {
         // map and read memory
         nro = malloc(NRO_SIZE);
@@ -55,7 +60,7 @@ public:
         instance_id = instance_id_cnt++;
     }
     
-    uc_inst(uc_inst* to_clone) : fork(nullptr), uc_term(false)
+    uc_inst(uc_inst* to_clone) : fork(nullptr), parent(to_clone), uc_term(false)
     {
         // map and read memory
         nro = malloc(NRO_SIZE);
@@ -77,6 +82,12 @@ public:
         
         uc_reg_state regs;
         uc_read_reg_state(to_clone->uc, &regs);
+
+        if (regs.pc == MAGIC_IMPORT)
+        {
+            regs.pc = regs.lr;
+        }
+
         uc_write_reg_state(uc, &regs);
     }
     
@@ -97,9 +108,24 @@ public:
         free(nro);
     }
     
+    void fork_complete()
+    {
+        uc_err err = UC_ERR_OK;
+        while (fork && !err && !fork->is_term())
+        {
+            err = fork->uc_run_slice();
+        }
+        
+        if (fork) delete fork;
+        fork = nullptr;
+    }
+    
     void fork_inst()
     {
+        fork_complete();
         fork = new uc_inst(this);
+        
+        
     }
     
     void uc_reg_init()
@@ -155,20 +181,46 @@ public:
         uint64_t pc;
         uc_reg_read(uc, UC_ARM64_REG_PC, &pc);
         
-        int instrs = 1;
-        
-        //printf("Instance Id %u: slice\n", instance_id);
+        int instrs = (fork || parent) ? 1 : 0x100;
+
+        if (fork && !fork->is_term())
+            fork->uc_run_slice();
 
         err = uc_emu_start(uc, pc, 0, 0, instrs);
-        if (err)
+        if (err && !uc_term)
         {
-            printf("Instance Id %u: Failed on uc_emu_start() with error returned: %u\n", instance_id, err);
-            uc_term = true;
-            return err;
+            if (get_pc() == MAGIC_IMPORT)
+            {
+                uint64_t lr;
+                uc_reg_read(uc, UC_ARM64_REG_LR, &lr);
+                uc_reg_write(uc, UC_ARM64_REG_PC, &lr);
+                err = UC_ERR_OK;
+                
+                pc = lr;
+            }
+            else if (get_pc() == 0 && get_sp() == STACK_END)
+            {
+                printf("Instance Id %u ran to completion.\n", instance_id);
+                uc_term = true;
+                return err;
+            }
+            else
+            {
+                printf("Instance Id %u: Failed on uc_emu_start() with error returned: %u\n", instance_id, err);
+                uc_term = true;
+                return err;
+            }
         }
         
         if (fork && !fork->is_term())
-            fork->uc_run_slice();
+        {
+            // Check when fork is diverging
+            if (!fork_divergence && fork->get_pc() != get_pc())
+            {
+                fork_divergence = pc;
+                printf("Instance Id %u: Fork %u diverged from %llx to %llx, PC @ %llx\n", instance_id, fork->get_id(), pc, fork->get_pc(), get_pc());
+            }
+        }
 
         return err;
     }
@@ -177,7 +229,7 @@ public:
     {
         uc_err err = UC_ERR_OK;
         uint64_t pc = start;
-        uint64_t sp = STACK + STACK_SIZE;
+        uint64_t sp = STACK_END;
 
         uc_term = false;
 
@@ -199,14 +251,7 @@ public:
         uc_print_regs(uc);
         
         // Finish fork's work if it exists
-        err = UC_ERR_OK;
-        while (fork && !err && !fork->is_term())
-        {
-            err = fork->uc_run_slice();
-        }
-        
-        if (fork) delete fork;
-        fork = nullptr;
+        fork_complete();
         
         // Result
         uc_reg_read(uc, UC_ARM64_REG_X0, &x0);
@@ -228,7 +273,7 @@ public:
         {
             return (heap + ptr - HEAP);
         }
-        else if (ptr >= STACK && ptr < STACK + STACK_SIZE)
+        else if (ptr >= STACK && ptr < STACK_END)
         {
             return (stack + ptr - STACK);
         }
@@ -247,7 +292,7 @@ public:
         return uc_term;
     }
     
-    void set_term()
+    void terminate()
     {
         uc_term = true;
     }
@@ -255,6 +300,34 @@ public:
     int get_id()
     {
         return instance_id;
+    }
+    
+    int parent_id()
+    {
+        if (!parent) return -1;
+        return parent->get_id();
+    }
+    
+    uint64_t get_pc()
+    {
+        uint64_t pc;
+        uc_reg_read(uc, UC_ARM64_REG_PC, &pc);
+        return pc;
+    }
+    
+    uint64_t get_sp()
+    {
+        uint64_t sp;
+        uc_reg_read(uc, UC_ARM64_REG_SP, &sp);
+        return sp;
+    }
+    
+    bool has_diverged()
+    {
+        if (parent && parent->fork_divergence)
+            return true;
+
+        return fork_divergence;
     }
 };
 

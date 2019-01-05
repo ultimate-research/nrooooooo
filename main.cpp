@@ -7,8 +7,21 @@
 #include <list>
 #include <elf.h>
 #include <cxxabi.h>
+#include <set>
 #include "crc32.h"
 #include "uc_inst.h"
+
+struct L2C_Token
+{
+    uint64_t pc;
+    int parent_id;
+    std::string func;
+    
+    bool operator<(const L2C_Token& comp) const
+    {
+        return pc < comp.pc;
+    }
+};
 
 int instance_id_cnt = 0;
 std::map<std::string, uint64_t> unresolved_syms;
@@ -17,6 +30,7 @@ std::map<std::string, uint64_t> resolved_syms;
 std::map<std::pair<uint64_t, uint64_t>, uint64_t> function_hashes;
 std::vector<L2CValue> lua_stack;
 std::map<uint64_t, L2CValue*> lua_active_vars;
+std::set<L2C_Token> tokens;
 
 bool syms_scanned = false;
 bool trace_code = true;
@@ -369,7 +383,7 @@ void hook_code(uc_engine *uc, uint64_t address, uint32_t size, uc_inst* inst)
     if (last_pc[0] == address && last_pc[0] == last_pc[1] && !inst->is_term())
     {
         printf(">>> Hang at 0x%" PRIx64 " ?\n", address);
-        inst->set_term();
+        inst->terminate();
     }
 
     if (trace_code && !inst->is_term())
@@ -384,8 +398,28 @@ void hook_code(uc_engine *uc, uint64_t address, uint32_t size, uc_inst* inst)
 
 void hook_import(uc_engine *uc, uint64_t address, uint32_t size, uc_inst* inst)
 {
+    uint64_t lr;
     std::string name = unresolved_syms_rev[address];
-    printf(">>> Instance Id %u: Import '%s' at %llx, size %x\n", inst->get_id(), name.c_str(), address, size);
+    
+    uc_reg_read(uc, UC_ARM64_REG_LR, &lr);
+    printf(">>> Instance Id %u: Import '%s' from %llx, size %x\n", inst->get_id(), name.c_str(), lr - 4, size);
+    
+    // Add token
+    L2C_Token token;
+    token.pc = lr - 4;
+    token.parent_id = inst->parent_id();
+    token.func = name;
+    if (tokens.find(token) != tokens.end() && inst->has_diverged())
+    {
+        printf(">>> Instance Id %u: Found convergence at %llx\n", inst->get_id(), lr - 4);
+        inst->terminate();
+        return;
+    }
+
+    tokens.insert(token);
+    
+    uint64_t magic = MAGIC_IMPORT;
+    uc_reg_write(uc, UC_ARM64_REG_PC, &magic);
     
     uint64_t args[9];
     uc_reg_read(uc, UC_ARM64_REG_X0, &args[0]);
@@ -439,7 +473,7 @@ void hook_import(uc_engine *uc, uint64_t address, uint32_t size, uc_inst* inst)
         if (val)
         {
             args[0] = 1;//val->as_bool(); //TODO fork
-            uc_reg_write(uc, UC_ARM64_REG_X0, &args[0]);
+            uc_reg_write(uc, UC_ARM64_REG_X0, &args[0]);    
             inst->fork_inst();
             
             args[0] = 0;
@@ -456,10 +490,6 @@ void hook_import(uc_engine *uc, uint64_t address, uint32_t size, uc_inst* inst)
     uc_reg_write(uc, UC_ARM64_REG_X6, &args[6]);
     uc_reg_write(uc, UC_ARM64_REG_X7, &args[7]);
     uc_reg_write(uc, UC_ARM64_REG_X8, &args[8]);
-    
-    uint64_t lr;
-    uc_reg_read(uc, UC_ARM64_REG_LR, &lr);
-    uc_reg_write(uc, UC_ARM64_REG_PC, &lr);
 }
 
 void hook_memrw(uc_engine *uc, uc_mem_type type, uint64_t addr, int size, int64_t value, uc_inst* inst)
@@ -498,7 +528,8 @@ bool hook_mem_invalid(uc_engine *uc, uc_mem_type type, uint64_t address, int siz
             printf(">>> Instance Id %u: Missing memory is being EXEC at 0x%"PRIx64 ", data size = %u, data value = 0x%"PRIx64 "\n", inst->get_id(), address, size, value);
             return false;
         case UC_ERR_EXCEPTION:
-            printf(">>> Instance Id %u: Exception\n", inst->get_id());
+            if (address != MAGIC_IMPORT)
+                printf(">>> Instance Id %u: Exception\n", inst->get_id());
             return false;
     }
 }
@@ -518,11 +549,11 @@ int main(int argc, char **argv, char **envp)
 
     //TODO read syms
     printf("Running lua2cpp::create_agent_fighter_animcmd_effect_wolf...\n");
-    animcmd_effect = inst.uc_run_stuff(resolved_syms["lua2cpp::create_agent_fighter_animcmd_effect_wolf(phx::Hash40, app::BattleObject*, app::BattleObjectModuleAccessor*, lua_State*)"], x0, x1, x2, x3);
+    //animcmd_effect = inst.uc_run_stuff(resolved_syms["lua2cpp::create_agent_fighter_animcmd_effect_wolf(phx::Hash40, app::BattleObject*, app::BattleObjectModuleAccessor*, lua_State*)"], x0, x1, x2, x3);
     printf("Running lua2cpp::create_agent_fighter_animcmd_expression_wolf...\n");
-    animcmd_expression = inst.uc_run_stuff(resolved_syms["lua2cpp::create_agent_fighter_animcmd_expression_wolf(phx::Hash40, app::BattleObject*, app::BattleObjectModuleAccessor*, lua_State*)"], x0, x1, x2, x3);
+    //animcmd_expression = inst.uc_run_stuff(resolved_syms["lua2cpp::create_agent_fighter_animcmd_expression_wolf(phx::Hash40, app::BattleObject*, app::BattleObjectModuleAccessor*, lua_State*)"], x0, x1, x2, x3);
     printf("Running lua2cpp::create_agent_fighter_animcmd_game_wolf...\n");
-    animcmd_game = inst.uc_run_stuff(resolved_syms["lua2cpp::create_agent_fighter_animcmd_game_wolf(phx::Hash40, app::BattleObject*, app::BattleObjectModuleAccessor*, lua_State*)"], x0, x1, x2, x3);
+    //animcmd_game = inst.uc_run_stuff(resolved_syms["lua2cpp::create_agent_fighter_animcmd_game_wolf(phx::Hash40, app::BattleObject*, app::BattleObjectModuleAccessor*, lua_State*)"], x0, x1, x2, x3);
     printf("Running lua2cpp::create_agent_fighter_animcmd_sound_wolf...\n");
     animcmd_sound = inst.uc_run_stuff(resolved_syms["lua2cpp::create_agent_fighter_animcmd_sound_wolf(phx::Hash40, app::BattleObject*, app::BattleObjectModuleAccessor*, lua_State*)"], x0, x1, x2, x3);
     
