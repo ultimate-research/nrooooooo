@@ -86,8 +86,7 @@ void nro_assignsyms(void* base)
     for (int i = 0; i < numsyms; i++)
     {
         char* demangled = abi::__cxa_demangle(strtab + symtab[i].st_name, 0, 0, 0);
-        printf("%s %llx %x\n", demangled, symtab[i].st_value, symtab[i].st_shndx);
-        
+
         if (symtab[i].st_shndx == 0 && demangled)
         {
             uint64_t addr = IMPORTS + (i * 0x1000);
@@ -153,9 +152,6 @@ void nro_relocate(void* base)
         if (!symtab[sym_idx].st_value)
             sym_val = 0;
 
-        //if (!symtab[sym_idx].st_shndx && sym_idx)
-            //sym_val = SaltySDCore_FindSymbol(name);
-
         uint64_t sym_val_and_addend = sym_val + rela->r_addend;
 
         switch (ELF64_R_TYPE(rela->r_info))
@@ -188,25 +184,6 @@ void nro_relocate(void* base)
             }
         }
     }
-    
-    /*numsyms = ((uintptr_t)strtab - (uintptr_t)symtab) / sizeof(Elf64_Sym);
-    unresolved_syms = std::vector<std::pair<std::string, uint64_t>>();
-    
-    for (int i = 0; i < numsyms; i++)
-    {
-        char* demangled = abi::__cxa_demangle(strtab + symtab[i].st_name, 0, 0, 0);
-        printf("%s %llx %x\n", demangled, symtab[i].st_value, symtab[i].st_shndx);
-        
-        if (symtab[i].st_shndx == 0 && demangled)
-        {
-            unresolved_syms.push_back(std::pair(std::string(demangled), NRO + symtab[i].st_value));
-        }
-        else if (symtab[i].st_shndx && demangled)
-        {
-            resolved_syms[std::string(demangled)] = NRO + symtab[i].st_value;
-        }
-        free(demangled);
-    }*/
 }
 
 uint64_t hash40(const void* data, size_t len)
@@ -418,6 +395,11 @@ void hook_import(uc_engine *uc, uint64_t address, uint32_t size, uc_inst* inst)
 
     tokens.insert(token);
     
+    // Write out a magic PC val which will cause Unicorn to fault.
+    // This allows for faster run time while there isn't a fork,
+    // since more instructions can be ran at once.
+    // Also helps to synchronize fork+parent PC vals when a fork
+    // does happen.
     uint64_t magic = MAGIC_IMPORT;
     uc_reg_write(uc, UC_ARM64_REG_PC, &magic);
     
@@ -472,11 +454,11 @@ void hook_import(uc_engine *uc, uint64_t address, uint32_t size, uc_inst* inst)
         L2CValue* val = lua_active_vars[args[0]];
         if (val)
         {
-            args[0] = 1;//val->as_bool(); //TODO fork
+            args[0] = 0;//val->as_bool(); //TODO fork
             uc_reg_write(uc, UC_ARM64_REG_X0, &args[0]);    
             inst->fork_inst();
             
-            args[0] = 0;
+            args[0] = 1;
         }
     }
     
@@ -549,11 +531,11 @@ int main(int argc, char **argv, char **envp)
 
     //TODO read syms
     printf("Running lua2cpp::create_agent_fighter_animcmd_effect_wolf...\n");
-    //animcmd_effect = inst.uc_run_stuff(resolved_syms["lua2cpp::create_agent_fighter_animcmd_effect_wolf(phx::Hash40, app::BattleObject*, app::BattleObjectModuleAccessor*, lua_State*)"], x0, x1, x2, x3);
+    animcmd_effect = inst.uc_run_stuff(resolved_syms["lua2cpp::create_agent_fighter_animcmd_effect_wolf(phx::Hash40, app::BattleObject*, app::BattleObjectModuleAccessor*, lua_State*)"], x0, x1, x2, x3);
     printf("Running lua2cpp::create_agent_fighter_animcmd_expression_wolf...\n");
-    //animcmd_expression = inst.uc_run_stuff(resolved_syms["lua2cpp::create_agent_fighter_animcmd_expression_wolf(phx::Hash40, app::BattleObject*, app::BattleObjectModuleAccessor*, lua_State*)"], x0, x1, x2, x3);
+    animcmd_expression = inst.uc_run_stuff(resolved_syms["lua2cpp::create_agent_fighter_animcmd_expression_wolf(phx::Hash40, app::BattleObject*, app::BattleObjectModuleAccessor*, lua_State*)"], x0, x1, x2, x3);
     printf("Running lua2cpp::create_agent_fighter_animcmd_game_wolf...\n");
-    //animcmd_game = inst.uc_run_stuff(resolved_syms["lua2cpp::create_agent_fighter_animcmd_game_wolf(phx::Hash40, app::BattleObject*, app::BattleObjectModuleAccessor*, lua_State*)"], x0, x1, x2, x3);
+    animcmd_game = inst.uc_run_stuff(resolved_syms["lua2cpp::create_agent_fighter_animcmd_game_wolf(phx::Hash40, app::BattleObject*, app::BattleObjectModuleAccessor*, lua_State*)"], x0, x1, x2, x3);
     printf("Running lua2cpp::create_agent_fighter_animcmd_sound_wolf...\n");
     animcmd_sound = inst.uc_run_stuff(resolved_syms["lua2cpp::create_agent_fighter_animcmd_sound_wolf(phx::Hash40, app::BattleObject*, app::BattleObjectModuleAccessor*, lua_State*)"], x0, x1, x2, x3);
     

@@ -118,14 +118,14 @@ public:
         
         if (fork) delete fork;
         fork = nullptr;
+        
+        fork_divergence = 0;
     }
     
     void fork_inst()
     {
         fork_complete();
         fork = new uc_inst(this);
-        
-        
     }
     
     void uc_reg_init()
@@ -165,7 +165,7 @@ public:
         }
         
         // granular hooks
-        uc_hook_add(uc, &trace1, UC_HOOK_CODE, (void*)hook_code, this, 1, 0);
+        //uc_hook_add(uc, &trace1, UC_HOOK_CODE, (void*)hook_code, this, 1, 0);
         uc_hook_add(uc, &trace2, UC_HOOK_MEM_UNMAPPED, (void*)hook_mem_invalid, this, 1, 0);
         //uc_hook_add(uc, &trace3, UC_HOOK_MEM_WRITE | UC_HOOK_MEM_READ, (void*)hook_memrw, this, 1, 0);
         
