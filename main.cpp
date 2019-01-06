@@ -7,30 +7,17 @@
 #include <list>
 #include <elf.h>
 #include <cxxabi.h>
-#include <set>
 #include "crc32.h"
 #include "uc_inst.h"
 
-struct L2C_Token
-{
-    uint64_t pc;
-    int parent_id;
-    std::string func;
-    
-    bool operator<(const L2C_Token& comp) const
-    {
-        return pc < comp.pc;
-    }
-};
-
 int instance_id_cnt = 0;
+int imports_numimports = 0;
 std::map<std::string, uint64_t> unresolved_syms;
 std::map<uint64_t, std::string> unresolved_syms_rev;
 std::map<std::string, uint64_t> resolved_syms;
 std::map<std::pair<uint64_t, uint64_t>, uint64_t> function_hashes;
-std::vector<L2CValue> lua_stack;
-std::map<uint64_t, L2CValue*> lua_active_vars;
 std::set<L2C_Token> tokens;
+std::set<L2C_MiniToken> converge_tokens;
 
 bool syms_scanned = false;
 bool trace_code = true;
@@ -89,7 +76,7 @@ void nro_assignsyms(void* base)
 
         if (symtab[i].st_shndx == 0 && demangled)
         {
-            uint64_t addr = IMPORTS + (i * 0x1000);
+            uint64_t addr = IMPORTS + (imports_numimports++ * 0x1000);
             unresolved_syms[std::string(demangled)] = addr;
             unresolved_syms_rev[addr] = std::string(demangled);
         }
@@ -384,16 +371,47 @@ void hook_import(uc_engine *uc, uint64_t address, uint32_t size, uc_inst* inst)
     // Add token
     L2C_Token token;
     token.pc = lr - 4;
-    token.parent_id = inst->parent_id();
-    token.func = name;
-    if (tokens.find(token) != tokens.end() && inst->has_diverged())
-    {
-        printf(">>> Instance Id %u: Found convergence at %llx\n", inst->get_id(), lr - 4);
-        inst->terminate();
-        return;
-    }
+    token.fork_heirarchy = inst->get_fork_heirarchy();
+    
+    
+    L2C_MiniToken converge_token;
+    converge_token.pc = lr - 4;
+    converge_token.func = name;
 
-    tokens.insert(token);
+    if (converge_tokens.find(converge_token) != converge_tokens.end() && !inst->has_diverged() && inst->parent_diverged())
+    {
+        if (inst->get_id())
+        {
+            printf(">>> Instance Id %u: Found convergence at %llx\n", inst->get_id(), lr - 4);
+            token.func = "CONV";
+            token.is_function = false;
+            tokens.insert(token);
+            inst->terminate();
+            return;
+        }
+    }
+    
+    token.func = name;
+    token.is_function = true;
+    if (converge_tokens.find(converge_token) != converge_tokens.end())
+    {
+        for (auto& t : tokens)
+        {
+            if (t.pc == lr - 4 && t.is_function)
+            {
+                if (token.fork_heirarchy.size() < t.fork_heirarchy.size())
+                {
+                    tokens.erase(t);
+                    tokens.insert(token);
+                }
+            }
+        }
+    }
+    else if (converge_tokens.find(converge_token) == converge_tokens.end())
+    {
+        converge_tokens.insert(converge_token);
+        tokens.insert(token);
+    }
     
     // Write out a magic PC val which will cause Unicorn to fault.
     // This allows for faster run time while there isn't a fork,
@@ -430,36 +448,39 @@ void hook_import(uc_engine *uc, uint64_t address, uint32_t size, uc_inst* inst)
     }
     else if (name == "lib::L2CAgent::clear_lua_stack()")
     {
-        lua_stack = std::vector<L2CValue>();
+        inst->lua_stack = std::vector<L2CValue>();
     }
     else if (name == "app::sv_animcmd::is_excute(lua_State*)")
     {
-        lua_stack.push_back(L2CValue(true)); //TODO fork?
+        inst->lua_stack.push_back(L2CValue(true));
+    }
+    else if (name == "app::sv_animcmd::frame(lua_State*, float)")
+    {
+        inst->lua_stack.push_back(L2CValue(true));
     }
     else if (name == "lib::L2CAgent::pop_lua_stack(int)")
     {
         L2CValue* out = (L2CValue*)inst->uc_ptr_to_real_ptr(args[8]);
         
-        *out = *(lua_stack.end() - 1);
-        lua_stack.pop_back();
+        *out = *(inst->lua_stack.end() - 1);
+        inst->lua_stack.pop_back();
         
-        lua_active_vars[args[8]] = out;
+        inst->lua_active_vars[args[8]] = out;
     }
     else if (name == "lib::L2CValue::~L2CValue()")
     {
-        lua_active_vars[args[0]] = nullptr;
+        inst->lua_active_vars[args[0]] = nullptr;
     }
-    else if (name == "lib::L2CValue::operator bool() const")
+    else if (name == "lib::L2CValue::operator bool() const"
+             || name == "lib::L2CValue::operator==(lib::L2CValue const&) const"
+             || name == "lib::L2CValue::operator<=(lib::L2CValue const&) const"
+             || name == "lib::L2CValue::operator<(lib::L2CValue const&) const")
     {
-        L2CValue* val = lua_active_vars[args[0]];
-        if (val)
-        {
-            args[0] = 0;//val->as_bool(); //TODO fork
-            uc_reg_write(uc, UC_ARM64_REG_X0, &args[0]);    
-            inst->fork_inst();
+        args[0] = 1;
+        uc_reg_write(uc, UC_ARM64_REG_X0, &args[0]);    
+        inst->fork_inst();
             
-            args[0] = 1;
-        }
+        args[0] = 0;
     }
     
     
@@ -497,21 +518,21 @@ bool hook_mem_invalid(uc_engine *uc, uc_mem_type type, uint64_t address, int siz
             // return false to indicate we want to stop emulation
             return false;
         case UC_MEM_READ_UNMAPPED:
-            printf(">>> Instance Id %u: Missing memory is being READ at 0x%"PRIx64 ", data size = %u, data value = 0x%"PRIx64 "\n", inst->get_id(), address, size, value);
+            printf(">>> Instance Id %u: Missing memory is being READ at 0x%"PRIx64 ", data size = %u, data value = 0x%"PRIx64 " PC @ %llx\n", inst->get_id(), address, size, value, inst->get_pc());
             //uc_print_regs(uc);
             
             return false;
         case UC_MEM_WRITE_UNMAPPED:        
-            printf(">>> Instance Id %u: Missing memory is being WRITE at 0x%"PRIx64 ", data size = %u, data value = 0x%"PRIx64 "\n", inst->get_id(), address, size, value);
+            printf(">>> Instance Id %u: Missing memory is being WRITE at 0x%"PRIx64 ", data size = %u, data value = 0x%"PRIx64 " PC @ %llx\n", inst->get_id(), address, size, value, inst->get_pc());
             //uc_print_regs(uc);
             
             return true;
         case UC_ERR_FETCH_UNMAPPED:
-            printf(">>> Instance Id %u: Missing memory is being EXEC at 0x%"PRIx64 ", data size = %u, data value = 0x%"PRIx64 "\n", inst->get_id(), address, size, value);
+            printf(">>> Instance Id %u: Missing memory is being EXEC at 0x%"PRIx64 ", data size = %u, data value = 0x%"PRIx64 " PC @ %llx\n", inst->get_id(), address, size, value, inst->get_pc());
             return false;
         case UC_ERR_EXCEPTION:
             if (address != MAGIC_IMPORT)
-                printf(">>> Instance Id %u: Exception\n", inst->get_id());
+                printf(">>> Instance Id %u: Exception PC @ %llx\n", inst->get_id(), inst->get_pc());
             return false;
     }
 }
@@ -540,9 +561,49 @@ int main(int argc, char **argv, char **envp)
     animcmd_sound = inst.uc_run_stuff(resolved_syms["lua2cpp::create_agent_fighter_animcmd_sound_wolf(phx::Hash40, app::BattleObject*, app::BattleObjectModuleAccessor*, lua_State*)"], x0, x1, x2, x3);
     
     uint64_t l2cagent = inst.heap_alloc(0x1000);
+    L2CAgent* agent = (L2CAgent*)inst.uc_ptr_to_real_ptr(l2cagent);
+    agent->unkptr40 = inst.heap_alloc(0x1000);
+    L2CUnk40* unk40 = (L2CUnk40*)inst.uc_ptr_to_real_ptr(agent->unkptr40);
+    unk40->unkptr50 = inst.heap_alloc(0x1000);
+    L2CUnk40ptr50* unk40ptr50 = (L2CUnk40ptr50*)inst.uc_ptr_to_real_ptr(unk40->unkptr50);
+    unk40ptr50->vtable = inst.heap_alloc(0x1000);
+    L2CUnk40ptr50Vtable* unk40ptr50vtable = (L2CUnk40ptr50Vtable*)inst.uc_ptr_to_real_ptr(unk40ptr50->vtable);
+    for (int i = 0; i < 64; i++)
+    {
+        uint64_t* out = (uint64_t*)inst.uc_ptr_to_real_ptr(unk40ptr50->vtable + i * sizeof(uint64_t));
+        uint64_t addr = IMPORTS + (imports_numimports++ * 0x1000);
+        std::string name = "L2CUnk40ptr50VtableFunc" + std::to_string(i);
+        
+        unresolved_syms[name] = addr;
+        unresolved_syms_rev[addr] = name;
+        *out = addr;
+        
+        inst.add_import_hook(addr);
+    }
     
-    uint64_t some_func = function_hashes[std::pair<uint64_t, uint64_t>(animcmd_sound, 0x13a0c3d061)];
+    tokens = std::set<L2C_Token>();
+    converge_tokens = std::set<L2C_MiniToken>();
+    
+    uint64_t some_func = function_hashes[std::pair<uint64_t, uint64_t>(animcmd_sound, 0x1692b4de28)];
     inst.uc_run_stuff(some_func, l2cagent, 0xFFFA000000000000);
+    
+    for (auto t : tokens)
+    {
+        for (auto i = 0; i < t.fork_heirarchy.size() - 1; i++)
+        {
+            printf("  ");
+        }
+
+        printf("%llx ", t.pc);
+        for (auto i = t.fork_heirarchy.size(); i > 0; i--)
+        {
+            printf("%i", t.fork_heirarchy[i-1]);
+            if (i > 1)
+                printf("->");
+        }
+
+        printf(" %s\n", t.func.c_str());
+    }
 
     return 0;
 }

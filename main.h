@@ -4,6 +4,7 @@
 #include <unicorn/unicorn.h>
 #include <vector>
 #include <map>
+#include <set>
 #include "l2c.h"
 
 extern bool trace_code;
@@ -24,8 +25,8 @@ extern std::map<std::string, uint64_t> unresolved_syms;
 extern std::map<uint64_t, std::string> unresolved_syms_rev;
 extern std::map<std::string, uint64_t> resolved_syms;
 extern std::map<std::pair<uint64_t, uint64_t>, uint64_t> function_hashes;
-extern std::vector<L2CValue> lua_stack;
-extern std::map<uint64_t, L2CValue*> lua_active_vars;
+extern std::set<L2C_Token> tokens;
+extern std::set<L2C_MiniToken> converge_tokens;
 
 extern void nro_assignsyms(void* base);
 extern void nro_relocate(void* base);

@@ -33,11 +33,15 @@ private:
     uc_inst* parent;
     uc_inst* fork;
     uint64_t fork_divergence = 0;
+    bool fork_is_new = false;
     
     bool uc_term;
     int instance_id;
 
 public:
+    std::vector<L2CValue> lua_stack;
+    std::map<uint64_t, L2CValue*> lua_active_vars;
+
     uc_inst() : fork(nullptr), parent(nullptr), uc_term(false)
     {
         // map and read memory
@@ -69,10 +73,12 @@ public:
         imports = malloc(IMPORTS_SIZE);
         
         memcpy(nro, to_clone->nro, NRO_SIZE);
-        memcpy(stack, to_clone->stack, NRO_SIZE);
-        memcpy(heap, to_clone->heap, NRO_SIZE);
-        memcpy(imports, to_clone->imports, NRO_SIZE);
+        memcpy(stack, to_clone->stack, STACK_SIZE);
+        memcpy(heap, to_clone->heap, HEAP_SIZE);
+        memcpy(imports, to_clone->imports, IMPORTS_SIZE);
         heap_size = to_clone->heap_size;
+        lua_stack = to_clone->lua_stack;
+        lua_active_vars = to_clone->lua_active_vars;
         
         // Write in constants
         memcpy(unresolved_syms["phx::detail::CRC32Table::table_"] - IMPORTS + imports, crc32_tab, sizeof(crc32_tab));
@@ -106,6 +112,11 @@ public:
         free(heap);
         free(stack);
         free(nro);
+        
+        nro = nullptr;
+        stack = nullptr;
+        heap = nullptr;
+        imports = nullptr;
     }
     
     void fork_complete()
@@ -125,7 +136,12 @@ public:
     void fork_inst()
     {
         fork_complete();
+        if (is_term()) return;
+
         fork = new uc_inst(this);
+        
+        printf("Instance Id %u forked to Instance Id %u\n", instance_id, fork->get_id());
+        fork_is_new = true;
     }
     
     void uc_reg_init()
@@ -141,6 +157,12 @@ public:
         uc_reg_read(uc, UC_ARM64_REG_CPACR_EL1, &x);
         x |= 0x300000; // set FPEN bit
         uc_reg_write(uc, UC_ARM64_REG_CPACR_EL1, &x);
+    }
+    
+    void add_import_hook(uint64_t addr)
+    {
+        uc_hook trace;
+        uc_hook_add(uc, &trace, UC_HOOK_CODE, (void*)hook_import, this, addr, addr);
     }
     
     uc_err uc_init()
@@ -161,6 +183,9 @@ public:
         for (auto pair : unresolved_syms)
         {
             uc_hook trace;
+            
+            //printf("%llx\n", pair.second);
+            
             uc_hook_add(uc, &trace, UC_HOOK_CODE, (void*)hook_import, this, pair.second, pair.second);
         }
         
@@ -182,9 +207,6 @@ public:
         uc_reg_read(uc, UC_ARM64_REG_PC, &pc);
         
         int instrs = (fork || parent) ? 1 : 0x100;
-
-        if (fork && !fork->is_term())
-            fork->uc_run_slice();
 
         err = uc_emu_start(uc, pc, 0, 0, instrs);
         if (err && !uc_term)
@@ -212,15 +234,35 @@ public:
             }
         }
         
-        if (fork && !fork->is_term())
+        if (fork && !fork->is_term() && !fork_is_new)
         {
+            fork->uc_run_slice();
+
             // Check when fork is diverging
-            if (!fork_divergence && fork->get_pc() != get_pc())
+            if (!fork_divergence && fork->get_pc() != get_pc() && get_pc() != MAGIC_IMPORT)
             {
                 fork_divergence = pc;
                 printf("Instance Id %u: Fork %u diverged from %llx to %llx, PC @ %llx\n", instance_id, fork->get_id(), pc, fork->get_pc(), get_pc());
+                
+                L2C_Token token;
+                token.pc = pc;
+                token.fork_heirarchy = get_fork_heirarchy();
+                token.func = "DIV_START";
+                tokens.insert(token);
+                
+                token.pc = get_pc();
+                token.fork_heirarchy = get_fork_heirarchy();
+                token.func = "DIV_DST_PARENT";
+                tokens.insert(token);
+                
+                token.pc = fork->get_pc();
+                token.fork_heirarchy = get_fork_heirarchy();
+                token.func = "DIV_DST_FORK";
+                tokens.insert(token);
             }
         }
+        
+        fork_is_new = false;
 
         return err;
     }
@@ -324,10 +366,32 @@ public:
     
     bool has_diverged()
     {
-        if (parent && parent->fork_divergence)
+        if (fork && fork->fork_divergence)
             return true;
 
         return fork_divergence;
+    }
+    
+    bool parent_diverged()
+    {
+        if (parent && parent->fork_divergence)
+            return true;
+
+        return false;
+    }
+    
+    std::vector<int> get_fork_heirarchy()
+    {
+        std::vector<int> out;
+ 
+        uc_inst* iter = this;
+        while(iter)
+        {
+            out.push_back(iter->get_id());
+            iter = iter->parent;
+        }
+        
+        return out;
     }
 };
 
