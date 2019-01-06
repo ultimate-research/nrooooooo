@@ -17,7 +17,7 @@ std::map<uint64_t, std::string> unresolved_syms_rev;
 std::map<std::string, uint64_t> resolved_syms;
 std::map<std::pair<uint64_t, uint64_t>, uint64_t> function_hashes;
 std::set<L2C_Token> tokens;
-std::set<L2C_MiniToken> converge_tokens;
+std::map<uint64_t, bool> converge_points;
 
 bool syms_scanned = false;
 bool trace_code = true;
@@ -213,6 +213,39 @@ void uc_read_reg_state(uc_engine *uc, struct uc_reg_state *regs)
     uc_reg_read(uc, UC_ARM64_REG_LR, &regs->lr);
     uc_reg_read(uc, UC_ARM64_REG_SP, &regs->sp);
     uc_reg_read(uc, UC_ARM64_REG_PC, &regs->pc);
+    
+    uc_reg_read(uc, UC_ARM64_REG_Q0, &regs->q0);
+    uc_reg_read(uc, UC_ARM64_REG_Q1, &regs->q1);
+    uc_reg_read(uc, UC_ARM64_REG_Q2, &regs->q2);
+    uc_reg_read(uc, UC_ARM64_REG_Q3, &regs->q3);
+    uc_reg_read(uc, UC_ARM64_REG_Q4, &regs->q4);
+    uc_reg_read(uc, UC_ARM64_REG_Q5, &regs->q5);
+    uc_reg_read(uc, UC_ARM64_REG_Q6, &regs->q6);
+    uc_reg_read(uc, UC_ARM64_REG_Q7, &regs->q7);
+    uc_reg_read(uc, UC_ARM64_REG_Q8, &regs->q8);
+    uc_reg_read(uc, UC_ARM64_REG_Q9, &regs->q9);
+    uc_reg_read(uc, UC_ARM64_REG_Q10, &regs->q10);
+    uc_reg_read(uc, UC_ARM64_REG_Q11, &regs->q11);
+    uc_reg_read(uc, UC_ARM64_REG_Q12, &regs->q12);
+    uc_reg_read(uc, UC_ARM64_REG_Q13, &regs->q13);
+    uc_reg_read(uc, UC_ARM64_REG_Q14, &regs->q14);
+    uc_reg_read(uc, UC_ARM64_REG_Q15, &regs->q15);
+    uc_reg_read(uc, UC_ARM64_REG_Q16, &regs->q16);
+    uc_reg_read(uc, UC_ARM64_REG_Q17, &regs->q17);
+    uc_reg_read(uc, UC_ARM64_REG_Q18, &regs->q18);
+    uc_reg_read(uc, UC_ARM64_REG_Q19, &regs->q19);
+    uc_reg_read(uc, UC_ARM64_REG_Q20, &regs->q20);
+    uc_reg_read(uc, UC_ARM64_REG_Q21, &regs->q21);
+    uc_reg_read(uc, UC_ARM64_REG_Q22, &regs->q22);
+    uc_reg_read(uc, UC_ARM64_REG_Q23, &regs->q23);
+    uc_reg_read(uc, UC_ARM64_REG_Q24, &regs->q24);
+    uc_reg_read(uc, UC_ARM64_REG_Q25, &regs->q25);
+    uc_reg_read(uc, UC_ARM64_REG_Q26, &regs->q26);
+    uc_reg_read(uc, UC_ARM64_REG_Q27, &regs->q27);
+    uc_reg_read(uc, UC_ARM64_REG_Q28, &regs->q28);
+    uc_reg_read(uc, UC_ARM64_REG_Q29, &regs->q29);
+    uc_reg_read(uc, UC_ARM64_REG_Q30, &regs->q30);
+    uc_reg_read(uc, UC_ARM64_REG_Q31, &regs->q31);
 }
 
 void uc_write_reg_state(uc_engine *uc, struct uc_reg_state *regs)
@@ -250,6 +283,39 @@ void uc_write_reg_state(uc_engine *uc, struct uc_reg_state *regs)
     uc_reg_write(uc, UC_ARM64_REG_LR, &regs->lr);
     uc_reg_write(uc, UC_ARM64_REG_SP, &regs->sp);
     uc_reg_write(uc, UC_ARM64_REG_PC, &regs->pc);
+    
+    uc_reg_write(uc, UC_ARM64_REG_Q0, &regs->q0);
+    uc_reg_write(uc, UC_ARM64_REG_Q1, &regs->q1);
+    uc_reg_write(uc, UC_ARM64_REG_Q2, &regs->q2);
+    uc_reg_write(uc, UC_ARM64_REG_Q3, &regs->q3);
+    uc_reg_write(uc, UC_ARM64_REG_Q4, &regs->q4);
+    uc_reg_write(uc, UC_ARM64_REG_Q5, &regs->q5);
+    uc_reg_write(uc, UC_ARM64_REG_Q6, &regs->q6);
+    uc_reg_write(uc, UC_ARM64_REG_Q7, &regs->q7);
+    uc_reg_write(uc, UC_ARM64_REG_Q8, &regs->q8);
+    uc_reg_write(uc, UC_ARM64_REG_Q9, &regs->q9);
+    uc_reg_write(uc, UC_ARM64_REG_Q10, &regs->q10);
+    uc_reg_write(uc, UC_ARM64_REG_Q11, &regs->q11);
+    uc_reg_write(uc, UC_ARM64_REG_Q12, &regs->q12);
+    uc_reg_write(uc, UC_ARM64_REG_Q13, &regs->q13);
+    uc_reg_write(uc, UC_ARM64_REG_Q14, &regs->q14);
+    uc_reg_write(uc, UC_ARM64_REG_Q15, &regs->q15);
+    uc_reg_write(uc, UC_ARM64_REG_Q16, &regs->q16);
+    uc_reg_write(uc, UC_ARM64_REG_Q17, &regs->q17);
+    uc_reg_write(uc, UC_ARM64_REG_Q18, &regs->q18);
+    uc_reg_write(uc, UC_ARM64_REG_Q19, &regs->q19);
+    uc_reg_write(uc, UC_ARM64_REG_Q20, &regs->q20);
+    uc_reg_write(uc, UC_ARM64_REG_Q21, &regs->q21);
+    uc_reg_write(uc, UC_ARM64_REG_Q22, &regs->q22);
+    uc_reg_write(uc, UC_ARM64_REG_Q23, &regs->q23);
+    uc_reg_write(uc, UC_ARM64_REG_Q24, &regs->q24);
+    uc_reg_write(uc, UC_ARM64_REG_Q25, &regs->q25);
+    uc_reg_write(uc, UC_ARM64_REG_Q26, &regs->q26);
+    uc_reg_write(uc, UC_ARM64_REG_Q27, &regs->q27);
+    uc_reg_write(uc, UC_ARM64_REG_Q28, &regs->q28);
+    uc_reg_write(uc, UC_ARM64_REG_Q29, &regs->q29);
+    uc_reg_write(uc, UC_ARM64_REG_Q30, &regs->q30);
+    uc_reg_write(uc, UC_ARM64_REG_Q31, &regs->q31);
 }
 
 void uc_print_regs(uc_engine *uc)
@@ -362,27 +428,40 @@ void hook_code(uc_engine *uc, uint64_t address, uint32_t size, uc_inst* inst)
 
 void hook_import(uc_engine *uc, uint64_t address, uint32_t size, uc_inst* inst)
 {
-    uint64_t lr;
+    uint64_t lr, origin;
     std::string name = unresolved_syms_rev[address];
     
     uc_reg_read(uc, UC_ARM64_REG_LR, &lr);
-    printf(">>> Instance Id %u: Import '%s' from %llx, size %x\n", inst->get_id(), name.c_str(), lr - 4, size);
+    origin = lr - 4;
+    printf(">>> Instance Id %u: Import '%s' from %llx, size %x\n", inst->get_id(), name.c_str(), origin, size);
     
     // Add token
     L2C_Token token;
-    token.pc = lr - 4;
+    token.pc = origin;
     token.fork_heirarchy = inst->get_fork_heirarchy();
-    
-    
-    L2C_MiniToken converge_token;
-    converge_token.pc = lr - 4;
-    converge_token.func = name;
+    token.func = name;
+    token.is_function = true;
 
-    if (converge_tokens.find(converge_token) != converge_tokens.end() && !inst->has_diverged() && inst->parent_diverged())
+    if (converge_points[origin] && !inst->has_diverged() && inst->parent_diverged())
     {
-        if (inst->get_id())
+        // Don't terminate if the token at the convergence point has a larger fork heirarchy
+        // Too large a fork heirarchy just means one of the forks got ahead of the root
+        // instance and the tokens will be replaced by correct values.
+        bool should_term = false;
+        for (auto& t : tokens)
         {
-            printf(">>> Instance Id %u: Found convergence at %llx\n", inst->get_id(), lr - 4);
+            if (t.pc == origin && t.is_function)
+            {
+                if (token.fork_heirarchy.size() > t.fork_heirarchy.size())
+                {
+                    should_term = true;
+                }
+            }
+        }
+        
+        if (should_term)
+        {
+            printf(">>> Instance Id %u: Found convergence at %llx\n", inst->get_id(), origin);
             token.func = "CONV";
             token.is_function = false;
             tokens.insert(token);
@@ -390,29 +469,33 @@ void hook_import(uc_engine *uc, uint64_t address, uint32_t size, uc_inst* inst)
             return;
         }
     }
-    
-    token.func = name;
-    token.is_function = true;
-    if (converge_tokens.find(converge_token) != converge_tokens.end())
+
+    bool add_token = false;
+    if (converge_points[origin])
     {
+        std::vector<L2C_Token> to_erase;
         for (auto& t : tokens)
         {
-            if (t.pc == lr - 4 && t.is_function)
+            if (t.pc == origin && t.is_function)
             {
                 if (token.fork_heirarchy.size() < t.fork_heirarchy.size())
                 {
-                    tokens.erase(t);
-                    tokens.insert(token);
+                    to_erase.push_back(t);
+                    add_token = true;
                 }
             }
         }
+        
+        for (auto& t : to_erase)
+        {
+            tokens.erase(t);
+        }
     }
-    else if (converge_tokens.find(converge_token) == converge_tokens.end())
+    else
     {
-        converge_tokens.insert(converge_token);
-        tokens.insert(token);
+        add_token = true;
     }
-    
+
     // Write out a magic PC val which will cause Unicorn to fault.
     // This allows for faster run time while there isn't a fork,
     // since more instructions can be ran at once.
@@ -422,6 +505,7 @@ void hook_import(uc_engine *uc, uint64_t address, uint32_t size, uc_inst* inst)
     uc_reg_write(uc, UC_ARM64_REG_PC, &magic);
     
     uint64_t args[9];
+    double fargs[9];
     uc_reg_read(uc, UC_ARM64_REG_X0, &args[0]);
     uc_reg_read(uc, UC_ARM64_REG_X1, &args[1]);
     uc_reg_read(uc, UC_ARM64_REG_X2, &args[2]);
@@ -431,6 +515,18 @@ void hook_import(uc_engine *uc, uint64_t address, uint32_t size, uc_inst* inst)
     uc_reg_read(uc, UC_ARM64_REG_X6, &args[6]);
     uc_reg_read(uc, UC_ARM64_REG_X7, &args[7]);
     uc_reg_read(uc, UC_ARM64_REG_X8, &args[8]);
+    
+    uc_reg_read(uc, UC_ARM64_REG_Q0, &fargs[0]);
+    uc_reg_read(uc, UC_ARM64_REG_Q1, &fargs[1]);
+    uc_reg_read(uc, UC_ARM64_REG_Q2, &fargs[2]);
+    uc_reg_read(uc, UC_ARM64_REG_Q3, &fargs[3]);
+    uc_reg_read(uc, UC_ARM64_REG_Q4, &fargs[4]);
+    uc_reg_read(uc, UC_ARM64_REG_Q5, &fargs[5]);
+    uc_reg_read(uc, UC_ARM64_REG_Q6, &fargs[6]);
+    uc_reg_read(uc, UC_ARM64_REG_Q7, &fargs[7]);
+    uc_reg_read(uc, UC_ARM64_REG_Q8, &fargs[8]);
+
+    converge_points[origin] = true;
     
     if (name == "operator new(unsigned long)")
     {
@@ -456,16 +552,78 @@ void hook_import(uc_engine *uc, uint64_t address, uint32_t size, uc_inst* inst)
     }
     else if (name == "app::sv_animcmd::frame(lua_State*, float)")
     {
+        token.args.push_back(args[0]);
+        token.fargs.push_back(fargs[0]);
+
         inst->lua_stack.push_back(L2CValue(true));
     }
     else if (name == "lib::L2CAgent::pop_lua_stack(int)")
     {
+        token.args.push_back(args[1]);
+    
         L2CValue* out = (L2CValue*)inst->uc_ptr_to_real_ptr(args[8]);
-        
-        *out = *(inst->lua_stack.end() - 1);
-        inst->lua_stack.pop_back();
+        L2CValue* iter = out;
+
+        for (int i = 0; i < args[1]; i++)
+        {
+            *iter = *(inst->lua_stack.end() - 1);
+            inst->lua_stack.pop_back();
+
+            iter++;
+        }
         
         inst->lua_active_vars[args[8]] = out;
+    }
+    else if (name == "lib::L2CValue::L2CValue(int)")
+    {
+        L2CValue* var = (L2CValue*)inst->uc_ptr_to_real_ptr(args[0]);
+        *var = L2CValue((int)args[1]);
+    
+        token.args.push_back((int)args[1]);
+    }
+    else if (name == "lib::L2CValue::L2CValue(long)")
+    {
+        L2CValue* var = (L2CValue*)inst->uc_ptr_to_real_ptr(args[0]);
+        *var = L2CValue((long)args[1]);
+    
+        token.args.push_back((long)args[1]);
+    }
+    else if (name == "lib::L2CValue::L2CValue(uint)"
+             || name == "lib::L2CValue::L2CValue(ulong)")
+    {
+        L2CValue* var = (L2CValue*)inst->uc_ptr_to_real_ptr(args[0]);
+        *var = L2CValue(args[1]);
+    
+        token.args.push_back(args[1]);
+    }
+    else if (name == "lib::L2CValue::L2CValue(bool)")
+    {
+        L2CValue* var = (L2CValue*)inst->uc_ptr_to_real_ptr(args[0]);
+        *var = L2CValue((bool)args[1]);
+    
+        token.args.push_back((int)args[1]);
+    }
+    else if (name == "lib::L2CValue::L2CValue(phx::Hash40)")
+    {
+        Hash40 hash = {args[1] & 0xFFFFFFFFFF};
+        L2CValue* var = (L2CValue*)inst->uc_ptr_to_real_ptr(args[0]);
+        *var = L2CValue(hash);
+        
+        token.args.push_back(hash.hash);
+    }
+    
+    else if (name == "lib::L2CValue::L2CValue(void*)")
+    {
+        L2CValue* var = (L2CValue*)inst->uc_ptr_to_real_ptr(args[0]);
+        *var = L2CValue((void*)args[1]);
+        
+        token.args.push_back(args[1]);
+    }
+    else if (name == "lib::L2CValue::as_number() const")
+    {
+        L2CValue* var = (L2CValue*)inst->uc_ptr_to_real_ptr(args[0]);
+
+        fargs[0] = var->as_number();
     }
     else if (name == "lib::L2CValue::~L2CValue()")
     {
@@ -476,14 +634,17 @@ void hook_import(uc_engine *uc, uint64_t address, uint32_t size, uc_inst* inst)
              || name == "lib::L2CValue::operator<=(lib::L2CValue const&) const"
              || name == "lib::L2CValue::operator<(lib::L2CValue const&) const")
     {
+        if (add_token)
+            tokens.insert(token);
+        add_token = false;
+    
         args[0] = 1;
         uc_reg_write(uc, UC_ARM64_REG_X0, &args[0]);    
         inst->fork_inst();
             
         args[0] = 0;
     }
-    
-    
+
     uc_reg_write(uc, UC_ARM64_REG_X0, &args[0]);
     uc_reg_write(uc, UC_ARM64_REG_X1, &args[1]);
     uc_reg_write(uc, UC_ARM64_REG_X2, &args[2]);
@@ -493,6 +654,19 @@ void hook_import(uc_engine *uc, uint64_t address, uint32_t size, uc_inst* inst)
     uc_reg_write(uc, UC_ARM64_REG_X6, &args[6]);
     uc_reg_write(uc, UC_ARM64_REG_X7, &args[7]);
     uc_reg_write(uc, UC_ARM64_REG_X8, &args[8]);
+    
+    uc_reg_write(uc, UC_ARM64_REG_Q0, &fargs[0]);
+    uc_reg_write(uc, UC_ARM64_REG_Q1, &fargs[1]);
+    uc_reg_write(uc, UC_ARM64_REG_Q2, &fargs[2]);
+    uc_reg_write(uc, UC_ARM64_REG_Q3, &fargs[3]);
+    uc_reg_write(uc, UC_ARM64_REG_Q4, &fargs[4]);
+    uc_reg_write(uc, UC_ARM64_REG_Q5, &fargs[5]);
+    uc_reg_write(uc, UC_ARM64_REG_Q6, &fargs[6]);
+    uc_reg_write(uc, UC_ARM64_REG_Q7, &fargs[7]);
+    uc_reg_write(uc, UC_ARM64_REG_Q8, &fargs[8]);
+    
+    if (add_token)
+        tokens.insert(token);
 }
 
 void hook_memrw(uc_engine *uc, uc_mem_type type, uint64_t addr, int size, int64_t value, uc_inst* inst)
@@ -560,6 +734,7 @@ int main(int argc, char **argv, char **envp)
     printf("Running lua2cpp::create_agent_fighter_animcmd_sound_wolf...\n");
     animcmd_sound = inst.uc_run_stuff(resolved_syms["lua2cpp::create_agent_fighter_animcmd_sound_wolf(phx::Hash40, app::BattleObject*, app::BattleObjectModuleAccessor*, lua_State*)"], x0, x1, x2, x3);
     
+    // Set up L2CAgent
     uint64_t l2cagent = inst.heap_alloc(0x1000);
     L2CAgent* agent = (L2CAgent*)inst.uc_ptr_to_real_ptr(l2cagent);
     agent->unkptr40 = inst.heap_alloc(0x1000);
@@ -582,9 +757,9 @@ int main(int argc, char **argv, char **envp)
     }
     
     tokens = std::set<L2C_Token>();
-    converge_tokens = std::set<L2C_MiniToken>();
+    converge_points = std::map<uint64_t, bool>();
     
-    uint64_t some_func = function_hashes[std::pair<uint64_t, uint64_t>(animcmd_sound, 0x1692b4de28)];
+    uint64_t some_func = function_hashes[std::pair<uint64_t, uint64_t>(animcmd_effect, hash40("effect_landinglight", 19))];
     inst.uc_run_stuff(some_func, l2cagent, 0xFFFA000000000000);
     
     for (auto t : tokens)
@@ -602,7 +777,29 @@ int main(int argc, char **argv, char **envp)
                 printf("->");
         }
 
-        printf(" %s\n", t.func.c_str());
+        printf(" %s", t.func.c_str());
+        
+        if (t.args.size())
+            printf(" args ");
+
+        for (auto i = 0; i < t.args.size(); i++)
+        {
+            printf("0x%x", t.args[i]);
+            if (i < t.args.size() - 1)
+                printf(", ");
+        }
+        
+        if (t.fargs.size())
+            printf(" fargs ");
+
+        for (auto i = 0; i < t.fargs.size(); i++)
+        {
+            printf("%f", t.fargs[i]);
+            if (i < t.fargs.size() - 1)
+                printf(", ");
+        }
+        
+        printf("\n");
     }
 
     return 0;

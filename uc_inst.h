@@ -254,6 +254,7 @@ public:
                 token.fork_heirarchy = get_fork_heirarchy();
                 token.func = "DIV_DST_PARENT";
                 tokens.insert(token);
+                converge_points[get_pc()] = true;
                 
                 token.pc = fork->get_pc();
                 token.fork_heirarchy = get_fork_heirarchy();

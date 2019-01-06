@@ -3,12 +3,19 @@
 
 #include <vector>
 
+struct Hash40
+{
+    uint64_t hash : 40;
+};
+
 struct L2C_Token
 {
     uint64_t pc;
     std::vector<int> fork_heirarchy;
     std::string func;
     bool is_function;
+    std::vector<uint64_t> args;
+    std::vector<double> fargs;
     
     bool operator<(const L2C_Token& comp) const
     {
@@ -18,22 +25,11 @@ struct L2C_Token
     }
 };
 
-struct L2C_MiniToken
-{
-    uint64_t pc;
-    std::string func;
-    
-    bool operator<(const L2C_MiniToken& comp) const
-    {
-        return pc < comp.pc;
-    }
-};
-
 enum L2CVarType
 {
     L2C_bool = 1,
-    L2C_number = 2,
-    L2C_float = 3,
+    L2C_integer = 2,
+    L2C_number = 3,
     L2C_pointer = 4,
     L2C_table = 5,
     L2C_inner_function = 6,
@@ -72,18 +68,53 @@ struct L2CValue
         raw = val ? 1 : 0;
     }
     
+    L2CValue(int val)
+    {
+        type = L2C_integer;
+        raw = val;
+    }
+    
+    L2CValue(uint64_t val)
+    {
+        type = L2C_integer;
+        raw = val;
+    }
+    
+    L2CValue(long val)
+    {
+        type = L2C_integer;
+        raw = val;
+    }
+    
+    L2CValue(Hash40 val)
+    {
+        type = L2C_hash;
+        raw = val.hash;
+    }
+    
+    L2CValue(void* val)
+    {
+        type = L2C_pointer;
+        raw_pointer = val;
+    }
+    
     bool as_bool()
     {
         return raw & 1;
     }
     
-    uint64_t as_number()
+    int as_integer()
     {
-        return raw;
+        return (int)raw;
     }
     
-    float as_float()
+    float as_number()
     {
+        if (type == L2C_integer)
+        {
+            return (float)as_integer();
+        }
+
         return raw_float;
     }
     
