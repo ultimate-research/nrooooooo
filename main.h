@@ -16,10 +16,10 @@ typedef struct uc_reg_state
     uint64_t x17, x18, x19, x20, x21, x22, x23, x24;
     uint64_t x25, x26, x27, x28, fp, lr, sp, pc;
     
-    double q0, q1, q2, q3, q4, q5 ,q6 ,q7, q8;
-    double q9, q10, q11, q12, q13, q14, q15, q16;
-    double q17, q18, q19, q20, q21, q22, q23, q24;
-    double q25, q26, q27, q28, q29, q30, q31;
+    double s0, s1, s2, s3, s4, s5 ,s6 ,s7, s8;
+    double s9, s10, s11, s12, s13, s14, s15, s16;
+    double s17, s18, s19, s20, s21, s22, s23, s24;
+    double s25, s26, s27, s28, s29, s30, s31;
 } uc_reg_state;
 
 class uc_inst;

@@ -214,38 +214,38 @@ void uc_read_reg_state(uc_engine *uc, struct uc_reg_state *regs)
     uc_reg_read(uc, UC_ARM64_REG_SP, &regs->sp);
     uc_reg_read(uc, UC_ARM64_REG_PC, &regs->pc);
     
-    uc_reg_read(uc, UC_ARM64_REG_Q0, &regs->q0);
-    uc_reg_read(uc, UC_ARM64_REG_Q1, &regs->q1);
-    uc_reg_read(uc, UC_ARM64_REG_Q2, &regs->q2);
-    uc_reg_read(uc, UC_ARM64_REG_Q3, &regs->q3);
-    uc_reg_read(uc, UC_ARM64_REG_Q4, &regs->q4);
-    uc_reg_read(uc, UC_ARM64_REG_Q5, &regs->q5);
-    uc_reg_read(uc, UC_ARM64_REG_Q6, &regs->q6);
-    uc_reg_read(uc, UC_ARM64_REG_Q7, &regs->q7);
-    uc_reg_read(uc, UC_ARM64_REG_Q8, &regs->q8);
-    uc_reg_read(uc, UC_ARM64_REG_Q9, &regs->q9);
-    uc_reg_read(uc, UC_ARM64_REG_Q10, &regs->q10);
-    uc_reg_read(uc, UC_ARM64_REG_Q11, &regs->q11);
-    uc_reg_read(uc, UC_ARM64_REG_Q12, &regs->q12);
-    uc_reg_read(uc, UC_ARM64_REG_Q13, &regs->q13);
-    uc_reg_read(uc, UC_ARM64_REG_Q14, &regs->q14);
-    uc_reg_read(uc, UC_ARM64_REG_Q15, &regs->q15);
-    uc_reg_read(uc, UC_ARM64_REG_Q16, &regs->q16);
-    uc_reg_read(uc, UC_ARM64_REG_Q17, &regs->q17);
-    uc_reg_read(uc, UC_ARM64_REG_Q18, &regs->q18);
-    uc_reg_read(uc, UC_ARM64_REG_Q19, &regs->q19);
-    uc_reg_read(uc, UC_ARM64_REG_Q20, &regs->q20);
-    uc_reg_read(uc, UC_ARM64_REG_Q21, &regs->q21);
-    uc_reg_read(uc, UC_ARM64_REG_Q22, &regs->q22);
-    uc_reg_read(uc, UC_ARM64_REG_Q23, &regs->q23);
-    uc_reg_read(uc, UC_ARM64_REG_Q24, &regs->q24);
-    uc_reg_read(uc, UC_ARM64_REG_Q25, &regs->q25);
-    uc_reg_read(uc, UC_ARM64_REG_Q26, &regs->q26);
-    uc_reg_read(uc, UC_ARM64_REG_Q27, &regs->q27);
-    uc_reg_read(uc, UC_ARM64_REG_Q28, &regs->q28);
-    uc_reg_read(uc, UC_ARM64_REG_Q29, &regs->q29);
-    uc_reg_read(uc, UC_ARM64_REG_Q30, &regs->q30);
-    uc_reg_read(uc, UC_ARM64_REG_Q31, &regs->q31);
+    uc_reg_read(uc, UC_ARM64_REG_S0, &regs->s0);
+    uc_reg_read(uc, UC_ARM64_REG_S1, &regs->s1);
+    uc_reg_read(uc, UC_ARM64_REG_S2, &regs->s2);
+    uc_reg_read(uc, UC_ARM64_REG_S3, &regs->s3);
+    uc_reg_read(uc, UC_ARM64_REG_S4, &regs->s4);
+    uc_reg_read(uc, UC_ARM64_REG_S5, &regs->s5);
+    uc_reg_read(uc, UC_ARM64_REG_S6, &regs->s6);
+    uc_reg_read(uc, UC_ARM64_REG_S7, &regs->s7);
+    uc_reg_read(uc, UC_ARM64_REG_S8, &regs->s8);
+    uc_reg_read(uc, UC_ARM64_REG_S9, &regs->s9);
+    uc_reg_read(uc, UC_ARM64_REG_S10, &regs->s10);
+    uc_reg_read(uc, UC_ARM64_REG_S11, &regs->s11);
+    uc_reg_read(uc, UC_ARM64_REG_S12, &regs->s12);
+    uc_reg_read(uc, UC_ARM64_REG_S13, &regs->s13);
+    uc_reg_read(uc, UC_ARM64_REG_S14, &regs->s14);
+    uc_reg_read(uc, UC_ARM64_REG_S15, &regs->s15);
+    uc_reg_read(uc, UC_ARM64_REG_S16, &regs->s16);
+    uc_reg_read(uc, UC_ARM64_REG_S17, &regs->s17);
+    uc_reg_read(uc, UC_ARM64_REG_S18, &regs->s18);
+    uc_reg_read(uc, UC_ARM64_REG_S19, &regs->s19);
+    uc_reg_read(uc, UC_ARM64_REG_S20, &regs->s20);
+    uc_reg_read(uc, UC_ARM64_REG_S21, &regs->s21);
+    uc_reg_read(uc, UC_ARM64_REG_S22, &regs->s22);
+    uc_reg_read(uc, UC_ARM64_REG_S23, &regs->s23);
+    uc_reg_read(uc, UC_ARM64_REG_S24, &regs->s24);
+    uc_reg_read(uc, UC_ARM64_REG_S25, &regs->s25);
+    uc_reg_read(uc, UC_ARM64_REG_S26, &regs->s26);
+    uc_reg_read(uc, UC_ARM64_REG_S27, &regs->s27);
+    uc_reg_read(uc, UC_ARM64_REG_S28, &regs->s28);
+    uc_reg_read(uc, UC_ARM64_REG_S29, &regs->s29);
+    uc_reg_read(uc, UC_ARM64_REG_S30, &regs->s30);
+    uc_reg_read(uc, UC_ARM64_REG_S31, &regs->s31);
 }
 
 void uc_write_reg_state(uc_engine *uc, struct uc_reg_state *regs)
@@ -284,38 +284,38 @@ void uc_write_reg_state(uc_engine *uc, struct uc_reg_state *regs)
     uc_reg_write(uc, UC_ARM64_REG_SP, &regs->sp);
     uc_reg_write(uc, UC_ARM64_REG_PC, &regs->pc);
     
-    uc_reg_write(uc, UC_ARM64_REG_Q0, &regs->q0);
-    uc_reg_write(uc, UC_ARM64_REG_Q1, &regs->q1);
-    uc_reg_write(uc, UC_ARM64_REG_Q2, &regs->q2);
-    uc_reg_write(uc, UC_ARM64_REG_Q3, &regs->q3);
-    uc_reg_write(uc, UC_ARM64_REG_Q4, &regs->q4);
-    uc_reg_write(uc, UC_ARM64_REG_Q5, &regs->q5);
-    uc_reg_write(uc, UC_ARM64_REG_Q6, &regs->q6);
-    uc_reg_write(uc, UC_ARM64_REG_Q7, &regs->q7);
-    uc_reg_write(uc, UC_ARM64_REG_Q8, &regs->q8);
-    uc_reg_write(uc, UC_ARM64_REG_Q9, &regs->q9);
-    uc_reg_write(uc, UC_ARM64_REG_Q10, &regs->q10);
-    uc_reg_write(uc, UC_ARM64_REG_Q11, &regs->q11);
-    uc_reg_write(uc, UC_ARM64_REG_Q12, &regs->q12);
-    uc_reg_write(uc, UC_ARM64_REG_Q13, &regs->q13);
-    uc_reg_write(uc, UC_ARM64_REG_Q14, &regs->q14);
-    uc_reg_write(uc, UC_ARM64_REG_Q15, &regs->q15);
-    uc_reg_write(uc, UC_ARM64_REG_Q16, &regs->q16);
-    uc_reg_write(uc, UC_ARM64_REG_Q17, &regs->q17);
-    uc_reg_write(uc, UC_ARM64_REG_Q18, &regs->q18);
-    uc_reg_write(uc, UC_ARM64_REG_Q19, &regs->q19);
-    uc_reg_write(uc, UC_ARM64_REG_Q20, &regs->q20);
-    uc_reg_write(uc, UC_ARM64_REG_Q21, &regs->q21);
-    uc_reg_write(uc, UC_ARM64_REG_Q22, &regs->q22);
-    uc_reg_write(uc, UC_ARM64_REG_Q23, &regs->q23);
-    uc_reg_write(uc, UC_ARM64_REG_Q24, &regs->q24);
-    uc_reg_write(uc, UC_ARM64_REG_Q25, &regs->q25);
-    uc_reg_write(uc, UC_ARM64_REG_Q26, &regs->q26);
-    uc_reg_write(uc, UC_ARM64_REG_Q27, &regs->q27);
-    uc_reg_write(uc, UC_ARM64_REG_Q28, &regs->q28);
-    uc_reg_write(uc, UC_ARM64_REG_Q29, &regs->q29);
-    uc_reg_write(uc, UC_ARM64_REG_Q30, &regs->q30);
-    uc_reg_write(uc, UC_ARM64_REG_Q31, &regs->q31);
+    uc_reg_write(uc, UC_ARM64_REG_S0, &regs->s0);
+    uc_reg_write(uc, UC_ARM64_REG_S1, &regs->s1);
+    uc_reg_write(uc, UC_ARM64_REG_S2, &regs->s2);
+    uc_reg_write(uc, UC_ARM64_REG_S3, &regs->s3);
+    uc_reg_write(uc, UC_ARM64_REG_S4, &regs->s4);
+    uc_reg_write(uc, UC_ARM64_REG_S5, &regs->s5);
+    uc_reg_write(uc, UC_ARM64_REG_S6, &regs->s6);
+    uc_reg_write(uc, UC_ARM64_REG_S7, &regs->s7);
+    uc_reg_write(uc, UC_ARM64_REG_S8, &regs->s8);
+    uc_reg_write(uc, UC_ARM64_REG_S9, &regs->s9);
+    uc_reg_write(uc, UC_ARM64_REG_S10, &regs->s10);
+    uc_reg_write(uc, UC_ARM64_REG_S11, &regs->s11);
+    uc_reg_write(uc, UC_ARM64_REG_S12, &regs->s12);
+    uc_reg_write(uc, UC_ARM64_REG_S13, &regs->s13);
+    uc_reg_write(uc, UC_ARM64_REG_S14, &regs->s14);
+    uc_reg_write(uc, UC_ARM64_REG_S15, &regs->s15);
+    uc_reg_write(uc, UC_ARM64_REG_S16, &regs->s16);
+    uc_reg_write(uc, UC_ARM64_REG_S17, &regs->s17);
+    uc_reg_write(uc, UC_ARM64_REG_S18, &regs->s18);
+    uc_reg_write(uc, UC_ARM64_REG_S19, &regs->s19);
+    uc_reg_write(uc, UC_ARM64_REG_S20, &regs->s20);
+    uc_reg_write(uc, UC_ARM64_REG_S21, &regs->s21);
+    uc_reg_write(uc, UC_ARM64_REG_S22, &regs->s22);
+    uc_reg_write(uc, UC_ARM64_REG_S23, &regs->s23);
+    uc_reg_write(uc, UC_ARM64_REG_S24, &regs->s24);
+    uc_reg_write(uc, UC_ARM64_REG_S25, &regs->s25);
+    uc_reg_write(uc, UC_ARM64_REG_S26, &regs->s26);
+    uc_reg_write(uc, UC_ARM64_REG_S27, &regs->s27);
+    uc_reg_write(uc, UC_ARM64_REG_S28, &regs->s28);
+    uc_reg_write(uc, UC_ARM64_REG_S29, &regs->s29);
+    uc_reg_write(uc, UC_ARM64_REG_S30, &regs->s30);
+    uc_reg_write(uc, UC_ARM64_REG_S31, &regs->s31);
 }
 
 void uc_print_regs(uc_engine *uc)
@@ -505,7 +505,7 @@ void hook_import(uc_engine *uc, uint64_t address, uint32_t size, uc_inst* inst)
     uc_reg_write(uc, UC_ARM64_REG_PC, &magic);
     
     uint64_t args[9];
-    double fargs[9];
+    float fargs[9];
     uc_reg_read(uc, UC_ARM64_REG_X0, &args[0]);
     uc_reg_read(uc, UC_ARM64_REG_X1, &args[1]);
     uc_reg_read(uc, UC_ARM64_REG_X2, &args[2]);
@@ -516,15 +516,15 @@ void hook_import(uc_engine *uc, uint64_t address, uint32_t size, uc_inst* inst)
     uc_reg_read(uc, UC_ARM64_REG_X7, &args[7]);
     uc_reg_read(uc, UC_ARM64_REG_X8, &args[8]);
     
-    uc_reg_read(uc, UC_ARM64_REG_Q0, &fargs[0]);
-    uc_reg_read(uc, UC_ARM64_REG_Q1, &fargs[1]);
-    uc_reg_read(uc, UC_ARM64_REG_Q2, &fargs[2]);
-    uc_reg_read(uc, UC_ARM64_REG_Q3, &fargs[3]);
-    uc_reg_read(uc, UC_ARM64_REG_Q4, &fargs[4]);
-    uc_reg_read(uc, UC_ARM64_REG_Q5, &fargs[5]);
-    uc_reg_read(uc, UC_ARM64_REG_Q6, &fargs[6]);
-    uc_reg_read(uc, UC_ARM64_REG_Q7, &fargs[7]);
-    uc_reg_read(uc, UC_ARM64_REG_Q8, &fargs[8]);
+    uc_reg_read(uc, UC_ARM64_REG_S0, &fargs[0]);
+    uc_reg_read(uc, UC_ARM64_REG_S1, &fargs[1]);
+    uc_reg_read(uc, UC_ARM64_REG_S2, &fargs[2]);
+    uc_reg_read(uc, UC_ARM64_REG_S3, &fargs[3]);
+    uc_reg_read(uc, UC_ARM64_REG_S4, &fargs[4]);
+    uc_reg_read(uc, UC_ARM64_REG_S5, &fargs[5]);
+    uc_reg_read(uc, UC_ARM64_REG_S6, &fargs[6]);
+    uc_reg_read(uc, UC_ARM64_REG_S7, &fargs[7]);
+    uc_reg_read(uc, UC_ARM64_REG_S8, &fargs[8]);
 
     converge_points[origin] = true;
     
@@ -619,6 +619,14 @@ void hook_import(uc_engine *uc, uint64_t address, uint32_t size, uc_inst* inst)
         
         token.args.push_back(args[1]);
     }
+    else if (name == "lib::L2CValue::L2CValue(float)")
+    {
+        L2CValue* var = (L2CValue*)inst->uc_ptr_to_real_ptr(args[0]);
+        *var = L2CValue(fargs[0]);
+        
+        printf("%f\n", fargs[0]);
+        token.fargs.push_back(fargs[0]);
+    }
     else if (name == "lib::L2CValue::as_number() const")
     {
         L2CValue* var = (L2CValue*)inst->uc_ptr_to_real_ptr(args[0]);
@@ -655,15 +663,15 @@ void hook_import(uc_engine *uc, uint64_t address, uint32_t size, uc_inst* inst)
     uc_reg_write(uc, UC_ARM64_REG_X7, &args[7]);
     uc_reg_write(uc, UC_ARM64_REG_X8, &args[8]);
     
-    uc_reg_write(uc, UC_ARM64_REG_Q0, &fargs[0]);
-    uc_reg_write(uc, UC_ARM64_REG_Q1, &fargs[1]);
-    uc_reg_write(uc, UC_ARM64_REG_Q2, &fargs[2]);
-    uc_reg_write(uc, UC_ARM64_REG_Q3, &fargs[3]);
-    uc_reg_write(uc, UC_ARM64_REG_Q4, &fargs[4]);
-    uc_reg_write(uc, UC_ARM64_REG_Q5, &fargs[5]);
-    uc_reg_write(uc, UC_ARM64_REG_Q6, &fargs[6]);
-    uc_reg_write(uc, UC_ARM64_REG_Q7, &fargs[7]);
-    uc_reg_write(uc, UC_ARM64_REG_Q8, &fargs[8]);
+    uc_reg_write(uc, UC_ARM64_REG_S0, &fargs[0]);
+    uc_reg_write(uc, UC_ARM64_REG_S1, &fargs[1]);
+    uc_reg_write(uc, UC_ARM64_REG_S2, &fargs[2]);
+    uc_reg_write(uc, UC_ARM64_REG_S3, &fargs[3]);
+    uc_reg_write(uc, UC_ARM64_REG_S4, &fargs[4]);
+    uc_reg_write(uc, UC_ARM64_REG_S5, &fargs[5]);
+    uc_reg_write(uc, UC_ARM64_REG_S6, &fargs[6]);
+    uc_reg_write(uc, UC_ARM64_REG_S7, &fargs[7]);
+    uc_reg_write(uc, UC_ARM64_REG_S8, &fargs[8]);
     
     if (add_token)
         tokens.insert(token);

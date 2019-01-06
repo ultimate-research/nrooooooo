@@ -15,7 +15,7 @@ struct L2C_Token
     std::string func;
     bool is_function;
     std::vector<uint64_t> args;
-    std::vector<double> fargs;
+    std::vector<float> fargs;
     
     bool operator<(const L2C_Token& comp) const
     {
@@ -96,6 +96,12 @@ struct L2CValue
     {
         type = L2C_pointer;
         raw_pointer = val;
+    }
+    
+    L2CValue(float val)
+    {
+        type = L2C_pointer;
+        raw_float = val;
     }
     
     bool as_bool()
