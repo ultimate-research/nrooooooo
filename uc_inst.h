@@ -12,7 +12,7 @@
 #define NRO_SIZE (0x2000000)
 
 #define IMPORTS 0xEEEE000000000000
-#define IMPORTS_SIZE (0x800000)
+#define IMPORTS_SIZE (0x1000000)
 
 #define HEAP 0xBBBB000000000000
 #define HEAP_SIZE (0x800000)
@@ -25,6 +25,7 @@
 #define INSTR_RET 0xD65F03C0
 
 #define REG_HISTORY_LIMIT 10
+#define JUMP_HISTORY_LIMIT 10
 
 enum CodeBlockType
 {
@@ -69,8 +70,8 @@ private:
     uint64_t heap_size = 0;
     void* stack;
     
-    uc_inst* parent;
     uc_inst* fork;
+    uc_inst* parent;
     uint64_t fork_divergence = 0;
     uint64_t start_addr = 0;
     bool fork_is_new = false;
@@ -79,21 +80,25 @@ private:
     bool uc_term;
     int instance_id;
     
-    uint64_t last_jump;
     std::vector<CodeBlock> block_stack;
     std::deque<uc_reg_state> reg_history;
+    std::deque<uint64_t> jump_history;
 
 public:
     std::vector<L2CValue> lua_stack;
     std::map<uint64_t, L2CValue*> lua_active_vars;
 
-    uc_inst() : fork(nullptr), parent(nullptr), uc_term(false)
+    uc_inst()
     {
         // map and read memory
         nro = malloc(NRO_SIZE);
         stack = malloc(STACK_SIZE);
         heap = malloc(HEAP_SIZE);
         imports = malloc(IMPORTS_SIZE);
+        
+        fork = nullptr;
+        parent = nullptr;
+        uc_term = false;
 
         FILE* f_nro = fopen("lua2cpp_wolf.nro", "rb");
         fread(nro, NRO_SIZE, 1, f_nro);
@@ -103,19 +108,23 @@ public:
         nro_relocate(nro);
         
         // Write in constants
-        memcpy(unresolved_syms["phx::detail::CRC32Table::table_"] - IMPORTS + imports, crc32_tab, sizeof(crc32_tab));
+        memcpy(imports + (unresolved_syms["phx::detail::CRC32Table::table_"] - IMPORTS), crc32_tab, sizeof(crc32_tab));
         
         uc_init();
         instance_id = instance_id_cnt++;
     }
     
-    uc_inst(uc_inst* to_clone) : fork(nullptr), parent(to_clone), uc_term(false)
+    uc_inst(uc_inst* to_clone)
     {
         // map and read memory
         nro = malloc(NRO_SIZE);
         stack = malloc(STACK_SIZE);
         heap = malloc(HEAP_SIZE);
         imports = malloc(IMPORTS_SIZE);
+        
+        fork = nullptr;
+        parent = to_clone;
+        uc_term = false;
         
         memcpy(nro, to_clone->nro, NRO_SIZE);
         memcpy(stack, to_clone->stack, STACK_SIZE);
@@ -124,10 +133,10 @@ public:
         heap_size = to_clone->heap_size;
         lua_stack = to_clone->lua_stack;
         lua_active_vars = to_clone->lua_active_vars;
-        last_jump = to_clone->last_jump;
         block_stack = to_clone->block_stack;
         slow = to_clone->slow;
         reg_history = to_clone->reg_history;
+        jump_history = to_clone->jump_history;
         
         // Write in constants
         memcpy(unresolved_syms["phx::detail::CRC32Table::table_"] - IMPORTS + imports, crc32_tab, sizeof(crc32_tab));
@@ -191,20 +200,13 @@ public:
         if (is_term()) return;
 
         fork = new uc_inst(this);
-        
-        printf("Instance Id %u forked to Instance Id %u\n", get_id(), fork->get_id());
+
+        //printf("Instance Id %u forked to Instance Id %u\n", get_id(), fork->get_id());
         fork_is_new = true;
     }
     
     void uc_reg_init()
     {
-        uint64_t zero = 0;
-        for (int i = UC_ARM64_REG_PC+1; i < UC_ARM64_REG_ENDING; i++)
-        {
-            zero = 0x0;
-            uc_reg_read(uc, i, &zero);
-        }
-        
         uint32_t x;
         uc_reg_read(uc, UC_ARM64_REG_CPACR_EL1, &x);
         x |= 0x300000; // set FPEN bit
@@ -236,7 +238,7 @@ public:
         {
             uc_hook trace;
             
-            //printf("%llx\n", pair.second);
+            //printf("%" PRIx64 "\n", pair.second);
             
             uc_hook_add(uc, &trace, UC_HOOK_CODE, (void*)hook_import, this, pair.second, pair.second);
         }
@@ -250,6 +252,8 @@ public:
         uc_mem_map_ptr(uc, HEAP, HEAP_SIZE, UC_PROT_ALL, heap);
         uc_mem_map_ptr(uc, IMPORTS, IMPORTS_SIZE, UC_PROT_ALL, imports);
         uc_mem_map_ptr(uc, STACK, STACK_SIZE, UC_PROT_ALL, stack);
+        
+        return err;
     }
     
     uc_err uc_run_slice()
@@ -259,7 +263,7 @@ public:
         start_pc = get_pc();
         start_lr = get_lr();
         start_sp = get_sp();
-        
+
         // Write to the register history before starting
         uc_reg_state regs;
         uc_read_reg_state(uc, &regs);
@@ -268,7 +272,7 @@ public:
         {
             reg_history.pop_back();
         }
-        
+
         int instrs = (fork || parent || slow) ? 1 : 0x100;
         uint32_t exec_instr = 0;
         if (uc_ptr_to_real_ptr(get_pc()))
@@ -295,56 +299,90 @@ public:
             else
             {
                 printf("Instance Id %u: Failed on uc_emu_start() with error returned: %u\n", get_id(), err);
+                uc_print_regs(uc);
                 uc_term = true;
                 return err;
             }
         }
+        
+        bool placed_goto = false;
+        if (get_pc() - start_pc != 4 && get_lr() == start_lr && get_pc() != get_lr() && get_pc() < start_pc && slow)
+        {
+            //printf("Instance %u: Loop branch detected PC @ %" PRIx64 ", prev %" PRIx64 " lr %" PRIx64 "\n", get_id(), get_pc(), start_pc, get_lr());
+
+            L2C_Token token;
+            
+            token.pc = get_jump_history(0);
+            token.fork_heirarchy = get_fork_heirarchy();
+            token.str = "SUB_GOTO";
+            token.type = L2C_TokenType_Branch;
+            token.args.push_back(get_pc());
+            add_token_by_prio(get_current_block(), token);
+
+            push_block(CodeBlockType_RetValSub);
+            push_jump(start_pc);
+            
+            placed_goto = true;
+        }
 
         if (get_pc() - start_pc != 4 && get_lr() == start_lr && get_pc() != get_lr() && reg_history[1].sp < reg_history[0].sp)
         {
-            printf("Instance %u: Retval branch detected PC @ %llx, prev %llx lr %llx\n", get_id(), get_pc(), start_pc, get_lr());
+            //printf("Instance %u: Retval branch detected PC @ %" PRIx64 ", prev %" PRIx64 " lr %" PRIx64 "\n", get_id(), get_pc(), start_pc, get_lr());
             L2C_Token token;
             
-            token.pc = get_lr() ? get_lr() - 4 : 0;
+            token.pc = get_jump_history(0);
             token.fork_heirarchy = get_fork_heirarchy();
-            token.func = "SUB_BRANCH";
+            token.str = "SUB_RETBRANCH";
+            token.type = L2C_TokenType_Branch;
             token.args.push_back(get_pc());
             if (!converge_points[token.pc])
+            {
                 add_token_by_prio(get_current_block(), token);
+                //converge_points[token.pc] = true;
+            }
 
             push_block(CodeBlockType_RetValSub);
-            last_jump = start_pc;
+            push_jump(start_pc);
         }
         
         if (get_pc() - start_pc != 4 && get_lr() != start_lr)
         {
-            printf("Instance %u: Branch detected PC @ %llx, prev %llx lr %llx\n", get_id(), get_pc(), start_pc, get_lr());
+            //printf("Instance %u: Branch detected PC @ %" PRIx64 ", prev %" PRIx64 " lr %" PRIx64 "\n", get_id(), get_pc(), start_pc, get_lr());
             L2C_Token token;
             
             token.pc = get_lr() ? get_lr() - 4 : 0;
             token.fork_heirarchy = get_fork_heirarchy();
-            token.func = "SUB_BRANCH";
+            token.str = "SUB_BRANCH";
+            token.type = L2C_TokenType_Branch;
             token.args.push_back(get_pc());
             if (!converge_points[token.pc])
+            {
                 add_token_by_prio(get_current_block(), token);
+                //converge_points[token.pc] = true;
+            }
 
             push_block();
-            last_jump = start_pc;
+            push_jump(start_pc);
         }
         
         if (exec_instr == INSTR_RET)
         {
-            printf("Instance %u: ret detected\n", get_id());
+            //printf("Instance %u: ret detected\n", get_id());
             L2C_Token token;
             token.pc = start_pc;
             token.fork_heirarchy = get_fork_heirarchy();
-            token.func = "SUB_RET";
-            token.args.push_back(get_pc());
-            add_token_by_prio(get_current_block(), token);
-            
+            token.str = "SUB_RET";
+            token.type = L2C_TokenType_Meta;
+ 
+            uint64_t current = get_current_block();
+
             pop_block();
+            
+            token.args.push_back(get_current_block());
+            token.args.push_back(get_pc());
+            add_token_by_prio(current, token);
         }
-        
+
         if (fork && !fork->is_term() && !fork_is_new)
         {
             fork->uc_run_slice();
@@ -353,37 +391,47 @@ public:
             if (!fork_divergence && fork->get_pc() != get_pc() && get_pc() != MAGIC_IMPORT)
             {
                 fork_divergence = start_pc;
-                printf("Instance Id %u: Fork %u diverged from %llx to %llx, PC @ %llx\n", get_id(), fork->get_id(), start_pc, fork->get_pc(), get_pc());
+                //printf("Instance Id %u: Fork %u diverged from %" PRIx64 " to %" PRIx64 ", PC @ %" PRIx64 "\n", get_id(), fork->get_id(), start_pc, fork->get_pc(), get_pc());
+                
+                if (placed_goto)
+                {
+                    pop_block(true);
+                    remove_matching_tokens(get_jump_history(1), "SUB_GOTO");
+                }
                 
                 L2C_Token token;
                 token.pc = start_pc;
                 token.fork_heirarchy = get_fork_heirarchy();
-                token.func = "DIV_FALSE";
+                token.str = "DIV_FALSE";
+                token.type = L2C_TokenType_Meta;
                 token.args.push_back(get_pc());
                 add_token_by_prio(get_current_block(), token);
                 
-                token.func = "DIV_TRUE";
+                token.str = "DIV_TRUE";
+                token.type = L2C_TokenType_Meta;
                 token.args.clear();
                 token.args.push_back(fork->get_pc());
                 add_token_by_prio(get_current_block(), token);
+                
                 
                 converge_points[get_pc()] = true;
                 
                 if (get_current_block_type() == CodeBlockType_Fork)
                 {
-                    printf("Pushing another block while current is Fork!\n");
-                    print_blockchain();
-                    fork->print_blockchain();
                     pop_block(true);
                     fork->pop_block(true);
-                    
-                    print_blockchain();
-                    fork->print_blockchain();
                 }
 
                 push_block(CodeBlockType_Fork);
                 fork->push_block(CodeBlockType_Fork);
+                //print_blockchain();
+                //fork->print_blockchain();
             }
+        }
+        
+        if (fork && fork->is_term())
+        {
+            fork_complete();
         }
         
         fork_is_new = false;
@@ -394,29 +442,32 @@ public:
     uint64_t uc_run_stuff(uint64_t start, bool run_slow, uint64_t x0 = 0, uint64_t x1 = 0, uint64_t x2 = 0, uint64_t x3 = 0)
     {
         uc_err err = UC_ERR_OK;
-        uint64_t pc = start;
-        uint64_t sp = STACK_END;
 
         uc_term = false;
         slow = run_slow;
 
-        uc_reg_write(uc, UC_ARM64_REG_PC, &pc);
-        uc_reg_write(uc, UC_ARM64_REG_SP, &sp);
+        set_pc(start);
+        set_sp(STACK_END);
+        set_lr(0);
         uc_reg_write(uc, UC_ARM64_REG_X0, &x0);
         uc_reg_write(uc, UC_ARM64_REG_X1, &x1);
         uc_reg_write(uc, UC_ARM64_REG_X2, &x2);
         uc_reg_write(uc, UC_ARM64_REG_X3, &x3);
         
+        reg_history.clear();
+        jump_history.clear();
         block_stack.clear();
+        parent = nullptr;
+        fork = nullptr;
+        instance_id_cnt = 1;
 
-        last_jump = start;
+        push_jump(start);
         block_stack.push_back({CodeBlockType_Invalid, 0});
         block_stack.push_back({CodeBlockType_Subroutine, start});
         blocks.insert(start);
         start_addr = start;
 
-        uint64_t vbar;
-
+        printf(">>> Instance Id %u: Starting emulation of %" PRIx64 "\n", get_id(), start);
         while (!err && !uc_term)
         {
             err = uc_run_slice();
@@ -428,7 +479,7 @@ public:
         // Finish fork's work if it exists
         fork_complete();
         
-        printf(">>> Instance Id %u: Emulation of %llx is complete.\n", get_id(), start);
+        printf(">>> Instance Id %u: Emulation of %" PRIx64 " is complete.\n", get_id(), start);
         
         // Result
         uc_reg_read(uc, UC_ARM64_REG_X0, &x0);
@@ -454,6 +505,8 @@ public:
         {
             return (stack + ptr - STACK);
         }
+        
+        return nullptr;
     }
     
     uint64_t heap_alloc(uint32_t size)
@@ -488,6 +541,16 @@ public:
     void set_pc(uint64_t pc)
     {
         uc_reg_write(uc, UC_ARM64_REG_PC, &pc);
+    }
+    
+    void set_sp(uint64_t sp)
+    {
+        uc_reg_write(uc, UC_ARM64_REG_SP, &sp);
+    }
+    
+    void set_lr(uint64_t lr)
+    {
+        uc_reg_write(uc, UC_ARM64_REG_LR, &lr);
     }
     
     uint64_t get_pc()
@@ -541,9 +604,22 @@ public:
         return out;
     }
     
-    uint64_t get_last_jump()
+    uint64_t get_jump_history(size_t depth = 0)
     {
-        return last_jump;
+        if (depth >= jump_history.size())
+            return -1;
+
+        return jump_history[depth];
+    }
+    
+    void push_jump(uint64_t addr)
+    {
+        // Write to the register history before starting
+        jump_history.push_front(addr);
+        if (jump_history.size() > JUMP_HISTORY_LIMIT)
+        {
+            jump_history.pop_back();
+        }
     }
     
     uint64_t get_current_block()
@@ -603,7 +679,7 @@ public:
         if (!slow) return;
 
         CodeBlock b = {type, get_pc()};
-        printf("Instance %u: Push block %llx, type %s\n", get_id(), b.addr, b.typestr().c_str());
+        //printf("Instance %u: Push block %" PRIx64 ", type %s\n", get_id(), b.addr, b.typestr().c_str());
         blocks.insert(b.addr);
         block_stack.push_back(b);
     }
@@ -633,7 +709,7 @@ public:
         }
 
         block_stack.pop_back();
-        printf("Instance Id %u: Block popped to %llx\n", get_id(), get_current_block());
+        //printf("Instance Id %u: Block popped to %" PRIx64 "\n", get_id(), get_current_block());
     }
     
     void print_blockchain()
@@ -643,7 +719,7 @@ public:
         int incr = 0;
         for (auto& b : block_stack)
         {
-            printf("%u: addr %llx, type %s\n", incr++, b.addr, b.typestr().c_str());
+            printf("%u: addr %" PRIx64 ", type %s\n", incr++, b.addr, b.typestr().c_str());
         }
     }
 };

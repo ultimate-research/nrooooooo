@@ -36,6 +36,7 @@ extern std::map<uint64_t, bool> converge_points;
 extern std::unordered_set<uint64_t> blocks;
 
 extern void add_token_by_prio(uint64_t block, L2C_Token token);
+extern void remove_matching_tokens(uint64_t addr, std::string str);
 
 extern void nro_assignsyms(void* base);
 extern void nro_relocate(void* base);

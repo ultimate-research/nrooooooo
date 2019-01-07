@@ -10,12 +10,19 @@ struct Hash40
     uint64_t hash : 40;
 };
 
+enum L2C_TokenType
+{
+    L2C_TokenType_Func = 0,
+    L2C_TokenType_Branch = 1,
+    L2C_TokenType_Meta = 2,
+};
+
 struct L2C_Token
 {
     uint64_t pc;
     std::vector<int> fork_heirarchy;
-    std::string func;
-    bool is_function;
+    std::string str;
+    L2C_TokenType type;
     std::vector<uint64_t> args;
     std::vector<float> fargs;
     
@@ -23,25 +30,26 @@ struct L2C_Token
     {
         if (pc == comp.pc) 
         {
-            if (fork_heirarchy.size() == comp.fork_heirarchy.size())
+            if (fork_heirarchy == comp.fork_heirarchy)
             {
-                if (args.size() == comp.args.size())
+                if (type == comp.type)
                 {
-                    if (fargs.size() == comp.fargs.size())
+                    if (str == comp.str)
                     {
-                        if (func == comp.func)
+                        if (args == comp.args)
                         {
-                            return is_function > comp.is_function;
+                            return fargs < comp.fargs;
                         }
-
-                        return func > comp.func;
+                        
+                        return args < comp.args;
                     }
-                    return fargs.size() > comp.fargs.size();
+                    return str < comp.str;
                 }
-                return args.size() > comp.args.size();
+                
+                return type < comp.type;
             }
-
-            return fork_heirarchy.size() > comp.fork_heirarchy.size();
+            
+            return fork_heirarchy < comp.fork_heirarchy;
         }
  
         return pc < comp.pc;
@@ -144,7 +152,7 @@ struct L2CValue
     
     L2CValue(float val)
     {
-        type = L2C_pointer;
+        type = L2C_number;
         raw_float = val;
     }
     
@@ -255,11 +263,98 @@ struct L2CUnk40
     uint64_t unk30;
     uint64_t unk38;
     uint64_t unk40;
-    uint64_t unk48;
+    uint64_t unkptr48;
     uint64_t unkptr50;
+    uint64_t unk58;
+    uint64_t unk60;
+    uint64_t unk68;
+    uint64_t unk70;
+    uint64_t unk78;
+    uint64_t unk80;
+    uint64_t unk88;
+    uint64_t unk90;
+    uint64_t unkptr98;
+    uint64_t unkptrA0;
+    uint64_t unkA8;
+    uint64_t unkB0;
+    uint64_t unkB8;
+    uint64_t unkC0;
+    uint64_t unkptrC8;
+    uint64_t unkD0;
+    uint64_t unkD8;
+    uint64_t unkE0;
+    uint64_t unkE8;
+    uint64_t unkF0;
+    uint64_t unkF8;
+    uint64_t unk100;
+    uint64_t unk108;
+    uint64_t unk110;
+    uint64_t unkptr118;
+    uint64_t unk120;
+    uint64_t unk128;
+    uint64_t unk130;
+    uint64_t unk138;
+    uint64_t unk140;
+    uint64_t unk148;
+    uint64_t unk150;
+    uint64_t unkptr158;
+    uint64_t unk160;
+    uint64_t unk168;
+    uint64_t unk170;
+    uint64_t unk178;
+    uint64_t unk180;
+    uint64_t unk188;
+    uint64_t unk190;
+    uint64_t unk198;
+    uint64_t unk1A0;
+    uint64_t unk1A8;
+    uint64_t unk1B0;
+    uint64_t unk1B8;
+    uint64_t unk1C0;
+    uint64_t unk1C8;
+    uint64_t unk1D0;
+    uint64_t unk1D8;
+    uint64_t unk1E0;
+    uint64_t unk1E8;
+    uint64_t unk1F0;
+    uint64_t unk1F8;
+    uint64_t unk200;
+    uint64_t unk208;
+    uint64_t unk210;
+    uint64_t unk218;
+};
+
+struct L2CUnk40ptr48
+{
+    uint64_t vtable;
 };
 
 struct L2CUnk40ptr50
+{
+    uint64_t vtable;
+};
+
+struct L2CUnk40ptr98
+{
+    uint64_t vtable;
+};
+
+struct L2CUnk40ptrA0
+{
+    uint64_t vtable;
+};
+
+struct L2CUnk40ptrC8
+{
+    uint64_t vtable;
+};
+
+struct L2CUnk40ptr118
+{
+    uint64_t vtable;
+};
+
+struct L2CUnk40ptr158
 {
     uint64_t vtable;
 };
