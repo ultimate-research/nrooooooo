@@ -10,6 +10,7 @@
 #include <cxxabi.h>
 #include "crc32.h"
 #include "uc_inst.h"
+#include "logging.h"
 
 int instance_id_cnt = 0;
 int imports_numimports = 0;
@@ -20,6 +21,10 @@ std::map<std::pair<uint64_t, uint64_t>, uint64_t> function_hashes;
 std::map<uint64_t, std::set<L2C_Token> > tokens;
 std::map<uint64_t, bool> converge_points;
 std::unordered_set<uint64_t> blocks;
+
+std::map<uint64_t, uint64_t> hash_cheat;
+std::map<uint64_t, uint64_t> hash_cheat_rev;
+uint64_t hash_cheat_ptr;
 
 bool syms_scanned = false;
 bool trace_code = true;
@@ -317,6 +322,8 @@ void uc_print_regs(uc_engine *uc)
     uint64_t x17, x18, x19, x20, x21, x22, x23, x24;
     uint64_t x25, x26, x27, x28, fp, lr, sp, pc;
     
+    if (!logmask_is_set(LOGMASK_DEBUG)) return;
+    
     uc_reg_read(uc, UC_ARM64_REG_X0, &x0);
     uc_reg_read(uc, UC_ARM64_REG_X1, &x1);
     uc_reg_read(uc, UC_ARM64_REG_X2, &x2);
@@ -351,45 +358,45 @@ void uc_print_regs(uc_engine *uc)
     uc_reg_read(uc, UC_ARM64_REG_SP, &sp);
     uc_reg_read(uc, UC_ARM64_REG_PC, &pc);
 
-    printf("Register dump:\n");
-    printf("x0  %16.16" PRIx64 " ", x0);
+    printf_debug("Register dump:\n");
+    printf_debug("x0  %16.16" PRIx64 " ", x0);
     printf("x1  %16.16" PRIx64 " ", x1);
     printf("x2  %16.16" PRIx64 " ", x2);
     printf("x3  %16.16" PRIx64 " ", x3);
     printf("\n");
-    printf("x4  %16.16" PRIx64 " ", x4);
+    printf_debug("x4  %16.16" PRIx64 " ", x4);
     printf("x5  %16.16" PRIx64 " ", x5);
     printf("x6  %16.16" PRIx64 " ", x6);
     printf("x7  %16.16" PRIx64 " ", x7);
     printf("\n");
-    printf("x8  %16.16" PRIx64 " ", x8);
+    printf_debug("x8  %16.16" PRIx64 " ", x8);
     printf("x9  %16.16" PRIx64 " ", x9);
     printf("x10 %16.16" PRIx64 " ", x10);
     printf("x11 %16.16" PRIx64 " ", x11);
     printf("\n");
-    printf("x12 %16.16" PRIx64 " ", x12);
+    printf_debug("x12 %16.16" PRIx64 " ", x12);
     printf("x13 %16.16" PRIx64 " ", x13);
     printf("x14 %16.16" PRIx64 " ", x14);
     printf("x15 %16.16" PRIx64 " ", x15);
     printf("\n");
-    printf("x16 %16.16" PRIx64 " ", x16);
+    printf_debug("x16 %16.16" PRIx64 " ", x16);
     printf("x17 %16.16" PRIx64 " ", x17);
     printf("x18 %16.16" PRIx64 " ", x18);
     printf("x19 %16.16" PRIx64 " ", x19);
     printf("\n");
-    printf("x20 %16.16" PRIx64 " ", x20);
+    printf_debug("x20 %16.16" PRIx64 " ", x20);
     printf("x21 %16.16" PRIx64 " ", x21);
     printf("x22 %16.16" PRIx64 " ", x22);
     printf("x23 %16.16" PRIx64 " ", x23);
     printf("\n");
-    printf("x24 %16.16" PRIx64 " ", x24);
+    printf_debug("x24 %16.16" PRIx64 " ", x24);
     printf("x25 %16.16" PRIx64 " ", x25);
     printf("x26 %16.16" PRIx64 " ", x26);
     printf("x27 %16.16" PRIx64 " ", x27);
     printf("\n");
-    printf("x28 %16.16" PRIx64 " ", x28);
+    printf_debug("x28 %16.16" PRIx64 " ", x28);
     printf("\n");
-    printf("fp  %16.16" PRIx64 " ", fp);
+    printf_debug("fp  %16.16" PRIx64 " ", fp);
     printf("lr  %16.16" PRIx64 " ", lr);
     printf("sp  %16.16" PRIx64 " ", sp);
     printf("pc  %16.16" PRIx64 " ", pc);
@@ -404,7 +411,7 @@ void hook_code(uc_engine *uc, uint64_t address, uint32_t size, uc_inst* inst)
 
     if (last_pc[0] == address && last_pc[0] == last_pc[1] && !inst->is_term())
     {
-        printf(">>> Hang at 0x%" PRIx64 " ?\n", address);
+        printf_warn("Hang at 0x%" PRIx64 " ?\n", address);
         inst->terminate();
     }
 
@@ -485,7 +492,7 @@ void hook_import(uc_engine *uc, uint64_t address, uint32_t size, uc_inst* inst)
     
     uc_reg_read(uc, UC_ARM64_REG_LR, &lr);
     origin = inst->get_jump_history();
-    //printf(">>> Instance Id %u: Import '%s' from %" PRIx64 ", size %x, block %" PRIx64 "\n", inst->get_id(), name.c_str(), origin, size, inst->get_last_block());
+    printf_verbose("Instance Id %u: Import '%s' from %" PRIx64 ", size %x, block %" PRIx64 "\n", inst->get_id(), name.c_str(), origin, size, inst->get_last_block());
     
     // Add token
     L2C_Token token;
@@ -494,7 +501,7 @@ void hook_import(uc_engine *uc, uint64_t address, uint32_t size, uc_inst* inst)
     token.str = name;
     token.type = L2C_TokenType_Func;
 
-    if (converge_points[origin] && !inst->has_diverged() && inst->parent_diverged())
+    if (!inst->is_basic_emu() && converge_points[origin] && !inst->has_diverged() && inst->parent_diverged())
     {
         // Don't terminate if the token at the convergence point has a larger fork heirarchy
         // Too large a fork heirarchy just means one of the forks got ahead of the root
@@ -523,7 +530,7 @@ void hook_import(uc_engine *uc, uint64_t address, uint32_t size, uc_inst* inst)
         
         if (should_term)
         {
-            printf(">>> Instance Id %u: Found convergence at %" PRIx64 "\n", inst->get_id(), origin);
+            printf_debug("Instance Id %u: Found convergence at %" PRIx64 "\n", inst->get_id(), origin);
             
             // We jumped backwards before this, loop?
             if (inst->get_jump_history(1) > inst->get_jump_history(0))
@@ -540,7 +547,7 @@ void hook_import(uc_engine *uc, uint64_t address, uint32_t size, uc_inst* inst)
         }
     }
     
-    if (converge_points[origin] && inst->parent_id() == -1)
+    if (!inst->is_basic_emu() && converge_points[origin] && inst->parent_id() == -1)
     {
         // Don't terminate if the token at the convergence point has a larger fork heirarchy
         // Too large a fork heirarchy just means one of the forks got ahead of the root
@@ -559,7 +566,7 @@ void hook_import(uc_engine *uc, uint64_t address, uint32_t size, uc_inst* inst)
         
         if (should_term)
         {
-            printf(">>> Instance Id %u: Found loop at %" PRIx64 "\n", inst->get_id(), origin);
+            printf_debug("Instance Id %u: Found loop at %" PRIx64 "\n", inst->get_id(), origin);
             token.str = "LOOPCONV";
             token.type = L2C_TokenType_Meta;
             add_token_by_prio(inst->get_last_block(), token);
@@ -569,7 +576,7 @@ void hook_import(uc_engine *uc, uint64_t address, uint32_t size, uc_inst* inst)
     }
 
     bool add_token = false;
-    if (converge_points[origin])
+    if (!inst->is_basic_emu() && converge_points[origin])
     {
         for (auto& pair : tokens)
         {
@@ -598,7 +605,7 @@ void hook_import(uc_engine *uc, uint64_t address, uint32_t size, uc_inst* inst)
             }
         }
     }
-    else
+    else if (!inst->is_basic_emu())
     {
         add_token = true;
     }
@@ -637,13 +644,29 @@ void hook_import(uc_engine *uc, uint64_t address, uint32_t size, uc_inst* inst)
     
     if (name == "operator new(unsigned long)")
     {
-        args[0] = inst->heap_alloc(args[1]);
+        uint64_t alloc = inst->heap_alloc(args[0]);
+        
+        //TODO
+        if (args[0] > 0x48)
+            hash_cheat_ptr = alloc;
+        
+        args[0] = alloc;
     }
     else if (name == "lib::L2CAgent::sv_set_function_hash(void*, phx::Hash40)")
     {
-        printf("Instance Id %u: lib::L2CAgent::sv_set_function_hash(0x%" PRIx64 ", 0x%" PRIx64 ", 0x%" PRIx64 ")\n", inst->get_id(), args[0], args[1], args[2]);
+        printf_info("Instance Id %u: lib::L2CAgent::sv_set_function_hash(0x%" PRIx64 ", 0x%" PRIx64 ", 0x%" PRIx64 ")\n", inst->get_id(), args[0], args[1], args[2]);
         
         function_hashes[std::pair<uint64_t, uint64_t>(args[0], args[2])] = args[1];
+    }
+    else if (name == "lua2cpp::L2CAgentBase::sv_set_status_func(lib::L2CValue const&, lib::L2CValue const&, void*)")
+    {
+        L2CValue* a = (L2CValue*)inst->uc_ptr_to_real_ptr(args[1]);
+        L2CValue* b = (L2CValue*)inst->uc_ptr_to_real_ptr(args[2]);
+        uint64_t funcptr = args[3];
+        
+        printf_info("Instance Id %u: lua2cpp::L2CAgentBase::sv_set_status_func(0x%" PRIx64 ", 0x%" PRIx64 ", 0x%" PRIx64 ", 0x%" PRIx64 ")\n", inst->get_id(), args[0], a->raw, b->raw, funcptr);
+        
+        function_hashes[std::pair<uint64_t, uint64_t>(args[0], a->raw << 32 | b->raw)] = funcptr;
     }
     else if (name == "lib::utility::Variadic::get_format() const")
     {
@@ -682,7 +705,7 @@ void hook_import(uc_engine *uc, uint64_t address, uint32_t size, uc_inst* inst)
             }
             else
             {
-                //printf("[WARN] Instance %u: Bad stack pop...\n", inst->get_id());
+                //printf_warn("Instance %u: Bad stack pop...\n", inst->get_id());
                 
                 L2CValue empty();
                 *iter = empty;
@@ -717,7 +740,7 @@ void hook_import(uc_engine *uc, uint64_t address, uint32_t size, uc_inst* inst)
         if (var)
             *var = L2CValue((int)args[1]);
         else
-            printf("[ERROR] Instance %u: Bad L2CValue init, %" PRIx64 ", %" PRIx64 "\n", inst->get_id(), args[0], origin);
+            printf_error("Instance %u: Bad L2CValue init, %" PRIx64 ", %" PRIx64 "\n", inst->get_id(), args[0], origin);
     
         token.args.push_back((int)args[1]);
         //add_token = false;
@@ -729,7 +752,7 @@ void hook_import(uc_engine *uc, uint64_t address, uint32_t size, uc_inst* inst)
         if (var)
             *var = L2CValue((long)args[1]);
         else
-            printf("[ERROR] Instance %u: Bad L2CValue init, %" PRIx64 ", %" PRIx64 "\n", inst->get_id(), args[0], origin);
+            printf_error("Instance %u: Bad L2CValue init, %" PRIx64 ", %" PRIx64 "\n", inst->get_id(), args[0], origin);
     
         token.args.push_back((long)args[1]);
         //add_token = false;
@@ -742,7 +765,7 @@ void hook_import(uc_engine *uc, uint64_t address, uint32_t size, uc_inst* inst)
         if (var)
             *var = L2CValue(args[1]);
         else
-            printf("[ERROR] Instance %u: Bad L2CValue init, %" PRIx64 ", %" PRIx64 "\n", inst->get_id(), args[0], origin);
+            printf_error("Instance %u: Bad L2CValue init, %" PRIx64 ", %" PRIx64 "\n", inst->get_id(), args[0], origin);
     
         token.args.push_back(args[1]);
         //add_token = false;
@@ -754,7 +777,7 @@ void hook_import(uc_engine *uc, uint64_t address, uint32_t size, uc_inst* inst)
         if (var)
             *var = L2CValue((bool)args[1]);
         else
-            printf("[ERROR] Instance %u: Bad L2CValue init, %" PRIx64 ", %" PRIx64 "\n", inst->get_id(), args[0], origin);
+            printf_error("Instance %u: Bad L2CValue init, %" PRIx64 ", %" PRIx64 "\n", inst->get_id(), args[0], origin);
     
         token.args.push_back((int)args[1]);
         //add_token = false;
@@ -767,7 +790,7 @@ void hook_import(uc_engine *uc, uint64_t address, uint32_t size, uc_inst* inst)
         if (var)
             *var = L2CValue(hash);
         else
-            printf("[ERROR] Instance %u: Bad L2CValue init, %" PRIx64 ", %" PRIx64 "\n", inst->get_id(), args[0], origin);
+            printf_error("Instance %u: Bad L2CValue init, %" PRIx64 ", %" PRIx64 "\n", inst->get_id(), args[0], origin);
         
         token.args.push_back(hash.hash);
         //add_token = false;
@@ -779,7 +802,7 @@ void hook_import(uc_engine *uc, uint64_t address, uint32_t size, uc_inst* inst)
         if (var)
             *var = L2CValue((void*)args[1]);
         else
-            printf("[ERROR] Instance %u: Bad L2CValue init, %" PRIx64 ", %" PRIx64 "\n", inst->get_id(), args[0], origin);
+            printf_error("Instance %u: Bad L2CValue init, %" PRIx64 ", %" PRIx64 "\n", inst->get_id(), args[0], origin);
         
         token.args.push_back(args[1]);
         //add_token = false;
@@ -791,7 +814,7 @@ void hook_import(uc_engine *uc, uint64_t address, uint32_t size, uc_inst* inst)
         if (var)
             *var = L2CValue((float)fargs[0]);
         else
-            printf("[ERROR] Instance %u: Bad L2CValue init, %" PRIx64 ", %" PRIx64 "\n", inst->get_id(), args[0], origin);
+            printf_error("Instance %u: Bad L2CValue init, %" PRIx64 ", %" PRIx64 "\n", inst->get_id(), args[0], origin);
         
         token.fargs.push_back(fargs[0]);
         //add_token = false;
@@ -807,7 +830,7 @@ void hook_import(uc_engine *uc, uint64_t address, uint32_t size, uc_inst* inst)
             token.fargs.push_back(var->as_number());
         }
         else
-            printf("[ERROR] Instance %u: Bad L2CValue access, %" PRIx64 ", %" PRIx64 "\n", inst->get_id(), args[0], origin);
+            printf_error("Instance %u: Bad L2CValue access, %" PRIx64 ", %" PRIx64 "\n", inst->get_id(), args[0], origin);
     }
     else if (name == "lib::L2CValue::as_bool() const")
     {
@@ -819,7 +842,7 @@ void hook_import(uc_engine *uc, uint64_t address, uint32_t size, uc_inst* inst)
             token.args.push_back(var->as_bool());
         }
         else
-            printf("[ERROR] Instance %u: Bad L2CValue access, %" PRIx64 ", %" PRIx64 "\n", inst->get_id(), args[0], origin);
+            printf_error("Instance %u: Bad L2CValue access, %" PRIx64 ", %" PRIx64 "\n", inst->get_id(), args[0], origin);
     }
     else if (name == "lib::L2CValue::as_integer() const")
     {
@@ -831,7 +854,7 @@ void hook_import(uc_engine *uc, uint64_t address, uint32_t size, uc_inst* inst)
             token.args.push_back(var->as_integer());
         }
         else
-            printf("[ERROR] Instance %u: Bad L2CValue access, %" PRIx64 ", %" PRIx64 "\n", inst->get_id(), args[0], origin);
+            printf_error("Instance %u: Bad L2CValue access, %" PRIx64 ", %" PRIx64 "\n", inst->get_id(), args[0], origin);
     }
     else if (name == "lib::L2CValue::as_pointer() const")
     {
@@ -843,7 +866,7 @@ void hook_import(uc_engine *uc, uint64_t address, uint32_t size, uc_inst* inst)
             token.args.push_back(var->raw);
         }
         else
-            printf("[ERROR] Instance %u: Bad L2CValue access, %" PRIx64 ", %" PRIx64 "\n", inst->get_id(), args[0], origin);
+            printf_error("Instance %u: Bad L2CValue access, %" PRIx64 ", %" PRIx64 "\n", inst->get_id(), args[0], origin);
     }
     else if (name == "lib::L2CValue::as_table() const")
     {
@@ -855,7 +878,7 @@ void hook_import(uc_engine *uc, uint64_t address, uint32_t size, uc_inst* inst)
             token.args.push_back(var->raw);
         }
         else
-            printf("[ERROR] Instance %u: Bad L2CValue access, %" PRIx64 ", %" PRIx64 "\n", inst->get_id(), args[0], origin);
+            printf_error("Instance %u: Bad L2CValue access, %" PRIx64 ", %" PRIx64 "\n", inst->get_id(), args[0], origin);
     }
     else if (name == "lib::L2CValue::as_inner_function() const")
     {
@@ -867,7 +890,7 @@ void hook_import(uc_engine *uc, uint64_t address, uint32_t size, uc_inst* inst)
             token.args.push_back(var->raw);
         }
         else
-            printf("[ERROR] Instance %u: Bad L2CValue access, %" PRIx64 ", %" PRIx64 "\n", inst->get_id(), args[0], origin);
+            printf_error("Instance %u: Bad L2CValue access, %" PRIx64 ", %" PRIx64 "\n", inst->get_id(), args[0], origin);
     }
     else if (name == "lib::L2CValue::as_hash() const")
     {
@@ -879,7 +902,7 @@ void hook_import(uc_engine *uc, uint64_t address, uint32_t size, uc_inst* inst)
             token.args.push_back(var->as_hash());
         }
         else
-            printf("[ERROR] Instance %u: Bad L2CValue access, %" PRIx64 ", %" PRIx64 "\n", inst->get_id(), args[0], origin);
+            printf_error("Instance %u: Bad L2CValue access, %" PRIx64 ", %" PRIx64 "\n", inst->get_id(), args[0], origin);
     }
     else if (name == "lib::L2CValue::as_string() const")
     {
@@ -891,7 +914,7 @@ void hook_import(uc_engine *uc, uint64_t address, uint32_t size, uc_inst* inst)
             token.args.push_back(var->raw);
         }
         else
-            printf("[ERROR] Instance %u: Bad L2CValue access, %" PRIx64 ", %" PRIx64 "\n", inst->get_id(), args[0], origin);
+            printf_error("Instance %u: Bad L2CValue access, %" PRIx64 ", %" PRIx64 "\n", inst->get_id(), args[0], origin);
     }
     else if (name == "lib::L2CValue::~L2CValue()")
     {
@@ -899,15 +922,52 @@ void hook_import(uc_engine *uc, uint64_t address, uint32_t size, uc_inst* inst)
         //add_token = false;
         //purge_markers(token.pc);
     }
+    else if (name == "lib::L2CValue::operator[](phx::Hash40) const")
+    {
+        if (!hash_cheat[args[1]])
+        {
+            hash_cheat[args[1]] = inst->heap_alloc(0x10);
+        }
+
+        uint64_t l2cval = hash_cheat[args[1]];
+        hash_cheat_rev[l2cval] = args[1];
+
+        printf_verbose("Hash cheating!! %llx\n", l2cval);
+        
+        args[0] = l2cval;
+    }
+    else if (name == "lib::L2CValue::operator=(lib::L2CValue const&)")
+    {
+        L2CValue* out = (L2CValue*)inst->uc_ptr_to_real_ptr(args[0]);
+        L2CValue* in = (L2CValue*)inst->uc_ptr_to_real_ptr(args[1]);
+        
+        if (in && out)
+        {
+            //TODO operator= destruction
+            *out = *in;
+            
+            if (hash_cheat_rev[args[0]])
+            {
+                printf_verbose("Hash cheating! %llx => %llx\n", hash_cheat_rev[args[0]], in->raw);
+                function_hashes[std::pair<uint64_t, uint64_t>(hash_cheat_ptr, hash_cheat_rev[args[0]])] = in->raw;
+            }
+        }
+        else
+        {
+            printf_error("Instance %u: Bad L2CValue assignment @ " PRIx64 "!\n", inst->get_id(), origin);
+        }
+    }
     else if (name == "lib::L2CValue::operator bool() const"
              || name == "lib::L2CValue::operator==(lib::L2CValue const&) const"
              || name == "lib::L2CValue::operator<=(lib::L2CValue const&) const"
              || name == "lib::L2CValue::operator<(lib::L2CValue const&) const")
     {
+        //TODO basic emu comparisons
+    
         if (add_token)
             add_subreplace_token(inst->get_last_block(), token);
         add_token = false;
-    
+
         args[0] = 1;
         uc_reg_write(uc, UC_ARM64_REG_X0, &args[0]);    
         inst->fork_inst();
@@ -945,10 +1005,11 @@ void hook_memrw(uc_engine *uc, uc_mem_type type, uint64_t addr, int size, int64_
     {
         default: break;
         case UC_MEM_READ:
-                 printf(">>> Instance Id %u: Memory is being READ at 0x%" PRIx64 ", data size = %u\n", inst->get_id(), addr, size);
+                 value = *(uint64_t*)(inst->uc_ptr_to_real_ptr(addr));
+                 printf_verbose("Instance Id %u: Memory is being READ at 0x%" PRIx64 ", data size = %u, data value = 0x%" PRIx64 "\n", inst->get_id(), addr, size, value);
                  break;
         case UC_MEM_WRITE:
-                 printf(">>> Instance Id %u: Memory is being WRITE at 0x%" PRIx64 ", data size = %u, data value = 0x%" PRIx64 "\n", inst->get_id(), addr, size, value);
+                 printf_verbose("Instance Id %u: Memory is being WRITE at 0x%" PRIx64 ", data size = %u, data value = 0x%" PRIx64 "\n", inst->get_id(), addr, size, value);
                  break;
     }
     return;
@@ -962,18 +1023,18 @@ bool hook_mem_invalid(uc_engine *uc, uc_mem_type type, uint64_t address, int siz
             // return false to indicate we want to stop emulation
             return false;
         case UC_MEM_READ_UNMAPPED:
-            printf(">>> Instance Id %u: Missing memory is being READ at 0x%" PRIx64 ", data size = %u, data value = 0x%" PRIx64 " PC @ %" PRIx64 "\n", inst->get_id(), address, size, value, inst->get_pc());
+            printf_error("Instance Id %u: Missing memory is being READ at 0x%" PRIx64 ", data size = %u, data value = 0x%" PRIx64 " PC @ %" PRIx64 "\n", inst->get_id(), address, size, value, inst->get_pc());
             //uc_print_regs(uc);
             
             return false;
         case UC_MEM_WRITE_UNMAPPED:        
-            printf(">>> Instance Id %u: Missing memory is being WRITE at 0x%" PRIx64 ", data size = %u, data value = 0x%" PRIx64 " PC @ %" PRIx64 "\n", inst->get_id(), address, size, value, inst->get_pc());
+            printf_error("Instance Id %u: Missing memory is being WRITE at 0x%" PRIx64 ", data size = %u, data value = 0x%" PRIx64 " PC @ %" PRIx64 "\n", inst->get_id(), address, size, value, inst->get_pc());
             //uc_print_regs(uc);
             
             return true;
         case UC_ERR_EXCEPTION:
-            if (address != MAGIC_IMPORT)
-                printf(">>> Instance Id %u: Exception PC @ %" PRIx64 "\n", inst->get_id(), inst->get_pc());
+            if (address != MAGIC_IMPORT && inst->get_sp() != STACK_END)
+                printf_error("Instance Id %u: Exception PC @ %" PRIx64 "\n", inst->get_id(), inst->get_pc());
             return false;
     }
 }
@@ -1048,7 +1109,7 @@ void print_blocks(uint64_t func)
 int main(int argc, char **argv, char **envp)
 {
     // lua2cpp::L2CFighterAnimcmdBase
-    uint64_t animcmd_effect, animcmd_expression, animcmd_game, animcmd_sound;
+    uint64_t animcmd_effect, animcmd_effect_share, animcmd_expression, animcmd_game, animcmd_sound;
     
     uint64_t x0, x1, x2, x3;
     x0 = hash40("wolf", 4); // Hash40
@@ -1057,17 +1118,56 @@ int main(int argc, char **argv, char **envp)
     x3 = 0xFFFC000000000000; // lua_state
     
     uc_inst inst = uc_inst();
-
-    //TODO read syms
-    printf("Running lua2cpp::create_agent_fighter_animcmd_effect_wolf...\n");
-    animcmd_effect = inst.uc_run_stuff(resolved_syms["lua2cpp::create_agent_fighter_animcmd_effect_wolf(phx::Hash40, app::BattleObject*, app::BattleObjectModuleAccessor*, lua_State*)"], false, x0, x1, x2, x3);
-    printf("Running lua2cpp::create_agent_fighter_animcmd_expression_wolf...\n");
-    animcmd_expression = inst.uc_run_stuff(resolved_syms["lua2cpp::create_agent_fighter_animcmd_expression_wolf(phx::Hash40, app::BattleObject*, app::BattleObjectModuleAccessor*, lua_State*)"], false, x0, x1, x2, x3);
-    printf("Running lua2cpp::create_agent_fighter_animcmd_game_wolf...\n");
-    animcmd_game = inst.uc_run_stuff(resolved_syms["lua2cpp::create_agent_fighter_animcmd_game_wolf(phx::Hash40, app::BattleObject*, app::BattleObjectModuleAccessor*, lua_State*)"], false, x0, x1, x2, x3);
-    printf("Running lua2cpp::create_agent_fighter_animcmd_sound_wolf...\n");
-    animcmd_sound = inst.uc_run_stuff(resolved_syms["lua2cpp::create_agent_fighter_animcmd_sound_wolf(phx::Hash40, app::BattleObject*, app::BattleObjectModuleAccessor*, lua_State*)"], false, x0, x1, x2, x3);
     
+    std::string agents[] = { "status_script", "animcmd_effect", "animcmd_effect_share", "animcmd_expression", "animcmd_expression", "animcmd_game", "animcmd_game_share", "animcmd_sound", "animcmd_sound_share", "ai_action", "ai_mode" };
+    std::string objects[] { "", "_illusion", "_blaster_bullet" };
+    std::string character = "wolf";
+    std::map<std::string, uint64_t> l2cagents;
+    std::map<uint64_t, std::string> l2cagents_rev;
+    
+    logmask_unset(LOGMASK_DEBUG | LOGMASK_INFO);
+    //logmask_set(LOGMASK_VERBOSE);
+    for (auto& agent : agents)
+    {
+        for (auto& object : objects)
+        {
+            std::string hashstr = character + object;
+            std::string key = hashstr + "_" + agent;
+            std::string func = "lua2cpp::create_agent_fighter_" + agent + "_" + character;
+            std::string args = "(phx::Hash40, app::BattleObject*, app::BattleObjectModuleAccessor*, lua_State*)";
+            
+            x0 = hash40(hashstr.c_str(), hashstr.length()); // Hash40
+            uint64_t funcptr = resolved_syms[func + args];
+            
+            printf_debug("Running %s(hash40(%s) => 0x%08x, ...)...\n", func.c_str(), hashstr.c_str(), x0);
+            uint64_t output = inst.uc_run_stuff(funcptr, false, x0, x1, x2, x3);
+            
+            if (output)
+            {
+                printf("Got output %" PRIx64 " for %s(hash40(%s) => 0x%08x, ...), mapping to %s\n", output, func.c_str(), hashstr.c_str(), x0, key.c_str());
+                l2cagents[key] = output;
+                l2cagents_rev[output] = key;
+                
+                // Special MSC stuff, they store funcs in a vtable
+                // so we run function 9 to actually set everything
+                if (agent == "status_script")
+                {
+                    uint64_t vtable_ptr = *(uint64_t*)(inst.uc_ptr_to_real_ptr(output));
+                    uint64_t* vtable = ((uint64_t*)(inst.uc_ptr_to_real_ptr(vtable_ptr)));
+                    uint64_t func = vtable[9];
+
+                    tokens.clear();
+                    blocks.clear();
+                    converge_points = std::map<uint64_t, bool>();
+                    
+                    inst.uc_run_stuff(func, true, output);
+                    print_blocks(funcptr);
+                }
+            }
+        }
+    }
+    //logmask_set(LOGMASK_DEBUG | LOGMASK_INFO);
+
     // Set up L2CAgent
     uint64_t l2cagent = inst.heap_alloc(0x1000);
     L2CAgent* agent = (L2CAgent*)inst.uc_ptr_to_real_ptr(l2cagent);
@@ -1077,7 +1177,7 @@ int main(int argc, char **argv, char **envp)
     for (int i = 0; i < 0x200; i += 8)
     {
         uint64_t class_alloc = inst.heap_alloc(0x1000);
-        uint64_t vtable_alloc = inst.heap_alloc(0x1000);
+        uint64_t vtable_alloc = inst.heap_alloc(512 * sizeof(uint64_t));
 
         *(uint64_t*)(inst.uc_ptr_to_real_ptr(agent->unkptr40) + i) = class_alloc;
         *(uint64_t*)(inst.uc_ptr_to_real_ptr(class_alloc)) = vtable_alloc;
@@ -1090,6 +1190,11 @@ int main(int argc, char **argv, char **envp)
             char tmp[256];
             snprintf(tmp, 256, "L2CUnk40ptr%XVtableFunc%u", i, j);
             
+            if (i == 0x40 && j == 0x39)
+            {
+                printf("%s %llx\n", tmp, addr);
+            }
+            
             std::string name(tmp);
             
             unresolved_syms[name] = addr;
@@ -1100,22 +1205,27 @@ int main(int argc, char **argv, char **envp)
         }
     }
     
-    tokens.clear();
-    blocks.clear();
-    converge_points = std::map<uint64_t, bool>();
-    
-    //bool doit = false;
     for (auto& pair : function_hashes)
     {
         auto regpair = pair.first;
         auto funcptr = pair.second;
-        //if (regpair.first == animcmd_sound)
-        
-        //if (funcptr == 0x100102610) doit = true;
-        
-        //if (doit)
+  
+        if (regpair.first == l2cagents[character + "_status_script"])
         {
-            printf(">--------------%10" PRIx64 "--------------<\n", regpair.second);
+            // String centering stuff
+            
+            printf(">--------------------------------------<\n");
+            
+            std::string agent_name = l2cagents_rev[regpair.first];
+            for (int i = 0; i < 20 - (agent_name.length() / 2); i++)
+            {
+                printf(" ");
+            }
+            printf("%s\n", agent_name.c_str());
+            
+            
+            printf("               %10" PRIx64 "\n", regpair.second);
+            printf(">--------------------------------------<\n");
             
             tokens.clear();
             blocks.clear();
@@ -1126,6 +1236,11 @@ int main(int argc, char **argv, char **envp)
             printf("<-------------------------------------->\n");
         }
     }
+    
+        
+    tokens.clear();
+    blocks.clear();
+    converge_points = std::map<uint64_t, bool>();
     
     uint64_t some_func = function_hashes[std::pair<uint64_t, uint64_t>(animcmd_effect, hash40("effect_landinglight", 19))];
     uint64_t some_func2 = function_hashes[std::pair<uint64_t, uint64_t>(animcmd_sound, 0x1692b4de28)];

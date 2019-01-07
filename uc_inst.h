@@ -6,6 +6,7 @@
 #include <vector>
 #include <deque>
 #include <map>
+#include "logging.h"
 
 // memory addresses for different segments
 #define NRO 0x100000000
@@ -201,7 +202,7 @@ public:
 
         fork = new uc_inst(this);
 
-        //printf("Instance Id %u forked to Instance Id %u\n", get_id(), fork->get_id());
+        printf_verbose("Instance Id %u forked to Instance Id %u\n", get_id(), fork->get_id());
         fork_is_new = true;
     }
     
@@ -226,7 +227,7 @@ public:
 
         err = uc_open(UC_ARCH_ARM64, UC_MODE_ARM, &uc);
         if (err) {
-            printf("Instance %u: Failed on uc_open() with error returned: %u (%s)\n",
+            printf_error("Instance %u: Failed on uc_open() with error returned: %u (%s)\n",
                     get_id(), err, uc_strerror(err));
             return err;
         }
@@ -246,7 +247,7 @@ public:
         // granular hooks
         //uc_hook_add(uc, &trace1, UC_HOOK_CODE, (void*)hook_code, this, 1, 0);
         uc_hook_add(uc, &trace2, UC_HOOK_MEM_UNMAPPED, (void*)hook_mem_invalid, this, 1, 0);
-        //uc_hook_add(uc, &trace3, UC_HOOK_MEM_WRITE | UC_HOOK_MEM_READ, (void*)hook_memrw, this, 1, 0);
+        uc_hook_add(uc, &trace3, UC_HOOK_MEM_WRITE | UC_HOOK_MEM_READ, (void*)hook_memrw, this, 1, 0);
         
         uc_mem_map_ptr(uc, NRO, NRO_SIZE, UC_PROT_ALL, nro);
         uc_mem_map_ptr(uc, HEAP, HEAP_SIZE, UC_PROT_ALL, heap);
@@ -273,7 +274,7 @@ public:
             reg_history.pop_back();
         }
 
-        int instrs = (fork || parent || slow) ? 1 : 0x100;
+        int instrs = (fork || parent || slow) ? 1 : 0;
         uint32_t exec_instr = 0;
         if (uc_ptr_to_real_ptr(get_pc()))
         {
@@ -292,23 +293,25 @@ public:
             }
             else if (get_pc() == 0 && get_sp() == STACK_END)
             {
-                printf("Instance Id %u ran to completion.\n", get_id());
+                printf_info("Instance Id %u ran to completion.\n", get_id());
                 uc_term = true;
                 return err;
             }
             else
             {
-                printf("Instance Id %u: Failed on uc_emu_start() with error returned: %u\n", get_id(), err);
+                printf_error("Instance Id %u: Failed on uc_emu_start() with error returned: %u\n", get_id(), err);
                 uc_print_regs(uc);
                 uc_term = true;
                 return err;
             }
         }
         
+        if (is_basic_emu()) return err;
+        
         bool placed_goto = false;
         if (get_pc() - start_pc != 4 && get_lr() == start_lr && get_pc() != get_lr() && get_pc() < start_pc && slow)
         {
-            //printf("Instance %u: Loop branch detected PC @ %" PRIx64 ", prev %" PRIx64 " lr %" PRIx64 "\n", get_id(), get_pc(), start_pc, get_lr());
+            printf_verbose("Instance %u: Loop branch detected PC @ %" PRIx64 ", prev %" PRIx64 " lr %" PRIx64 "\n", get_id(), get_pc(), start_pc, get_lr());
 
             L2C_Token token;
             
@@ -327,7 +330,7 @@ public:
 
         if (get_pc() - start_pc != 4 && get_lr() == start_lr && get_pc() != get_lr() && reg_history[1].sp < reg_history[0].sp)
         {
-            //printf("Instance %u: Retval branch detected PC @ %" PRIx64 ", prev %" PRIx64 " lr %" PRIx64 "\n", get_id(), get_pc(), start_pc, get_lr());
+            printf_verbose("Instance %u: Retval branch detected PC @ %" PRIx64 ", prev %" PRIx64 " lr %" PRIx64 "\n", get_id(), get_pc(), start_pc, get_lr());
             L2C_Token token;
             
             token.pc = get_jump_history(0);
@@ -347,7 +350,7 @@ public:
         
         if (get_pc() - start_pc != 4 && get_lr() != start_lr)
         {
-            //printf("Instance %u: Branch detected PC @ %" PRIx64 ", prev %" PRIx64 " lr %" PRIx64 "\n", get_id(), get_pc(), start_pc, get_lr());
+            printf_verbose("Instance %u: Branch detected PC @ %" PRIx64 ", prev %" PRIx64 " lr %" PRIx64 "\n", get_id(), get_pc(), start_pc, get_lr());
             L2C_Token token;
             
             token.pc = get_lr() ? get_lr() - 4 : 0;
@@ -367,7 +370,7 @@ public:
         
         if (exec_instr == INSTR_RET)
         {
-            //printf("Instance %u: ret detected\n", get_id());
+            printf_verbose("Instance %u: ret detected\n", get_id());
             L2C_Token token;
             token.pc = start_pc;
             token.fork_heirarchy = get_fork_heirarchy();
@@ -391,7 +394,7 @@ public:
             if (!fork_divergence && fork->get_pc() != get_pc() && get_pc() != MAGIC_IMPORT)
             {
                 fork_divergence = start_pc;
-                //printf("Instance Id %u: Fork %u diverged from %" PRIx64 " to %" PRIx64 ", PC @ %" PRIx64 "\n", get_id(), fork->get_id(), start_pc, fork->get_pc(), get_pc());
+                printf_verbose("Instance Id %u: Fork %u diverged from %" PRIx64 " to %" PRIx64 ", PC @ %" PRIx64 "\n", get_id(), fork->get_id(), start_pc, fork->get_pc(), get_pc());
                 
                 if (placed_goto)
                 {
@@ -454,6 +457,10 @@ public:
         uc_reg_write(uc, UC_ARM64_REG_X2, &x2);
         uc_reg_write(uc, UC_ARM64_REG_X3, &x3);
         
+        //TODO: output value through x8 for some funcs
+        uint64_t x8 = 0;
+        uc_reg_write(uc, UC_ARM64_REG_X8, &x8);
+        
         reg_history.clear();
         jump_history.clear();
         block_stack.clear();
@@ -467,20 +474,21 @@ public:
         blocks.insert(start);
         start_addr = start;
 
-        printf(">>> Instance Id %u: Starting emulation of %" PRIx64 "\n", get_id(), start);
+        printf_info("Instance Id %u: Starting emulation of %" PRIx64 "\n", get_id(), start);
         while (!err && !uc_term)
         {
             err = uc_run_slice();
         }
 
-        printf(">>> Instance Id %u: Emulation done. Below is the CPU contexts\n", get_id());
+        printf_info("Instance Id %u: Emulation done.\n", get_id());
+        printf_verbose("Below is the CPU contexts:\n");
         uc_print_regs(uc);
         
         // Finish fork's work if it exists
         fork_complete();
         
-        printf(">>> Instance Id %u: Emulation of %" PRIx64 " is complete.\n", get_id(), start);
-        
+        printf_info("Instance Id %u: Emulation of %" PRIx64 " is complete.\n", get_id(), start);
+
         // Result
         uc_reg_read(uc, UC_ARM64_REG_X0, &x0);
         
@@ -513,7 +521,7 @@ public:
     {
         uint64_t retval = HEAP + heap_size;
         heap_size += size;
-        
+
         return retval;
     }
     
@@ -721,6 +729,11 @@ public:
         {
             printf("%u: addr %" PRIx64 ", type %s\n", incr++, b.addr, b.typestr().c_str());
         }
+    }
+    
+    bool is_basic_emu()
+    {
+        return !slow;
     }
 };
 
