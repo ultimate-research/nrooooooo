@@ -3,6 +3,8 @@
 
 #include <vector>
 
+struct L2CValue;
+
 struct Hash40
 {
     uint64_t hash : 40;
@@ -19,7 +21,28 @@ struct L2C_Token
     
     bool operator<(const L2C_Token& comp) const
     {
-        if (pc == comp.pc) return fork_heirarchy.size() > comp.fork_heirarchy.size();
+        if (pc == comp.pc) 
+        {
+            if (fork_heirarchy.size() == comp.fork_heirarchy.size())
+            {
+                if (args.size() == comp.args.size())
+                {
+                    if (fargs.size() == comp.fargs.size())
+                    {
+                        if (func == comp.func)
+                        {
+                            return is_function > comp.is_function;
+                        }
+
+                        return func > comp.func;
+                    }
+                    return fargs.size() > comp.fargs.size();
+                }
+                return args.size() > comp.args.size();
+            }
+
+            return fork_heirarchy.size() > comp.fork_heirarchy.size();
+        }
  
         return pc < comp.pc;
     }
@@ -27,6 +50,7 @@ struct L2C_Token
 
 enum L2CVarType
 {
+    L2C_void = 0,
     L2C_bool = 1,
     L2C_integer = 2,
     L2C_number = 3,
@@ -37,13 +61,30 @@ enum L2CVarType
     L2C_string = 8,
 };
 
+struct L2CTable_meta
+{
+    uint64_t a;
+    uint64_t b;
+    uint64_t c;
+    uint64_t d;
+};
+
 struct L2CTable
 {
     uint32_t refcnt;
+    uint32_t unk;
+    
+    uint64_t begin; // L2CValue*
+    uint64_t end; // L2CValue*
+    uint64_t also_end; // L2CValue*
+    L2CTable_meta meta;
+    uint64_t unk_ptr;
 };
 
 struct L2CInnerFunctionBase
 {
+    uint64_t unk;
+    uint32_t refcnt;
 };
 
 struct L2CValue
@@ -57,10 +98,13 @@ struct L2CValue
         void* raw_pointer;
         L2CTable* raw_table;
         L2CInnerFunctionBase* raw_innerfunc;
-        //std::string raw_string;
+        std::string* raw_string;
     };
-    uint64_t string_1;
-    uint64_t string_2;
+    
+    L2CValue(void)
+    {
+        type = L2C_void;
+    }
     
     L2CValue(bool val)
     {
@@ -104,17 +148,23 @@ struct L2CValue
         raw_float = val;
     }
     
-    bool as_bool()
+    L2CValue(char const* val)
+    {
+        type = L2C_string;
+        raw_string = new std::string(val);
+    }
+    
+    bool as_bool(void)
     {
         return raw & 1;
     }
     
-    int as_integer()
+    int as_integer(void)
     {
         return (int)raw;
     }
     
-    float as_number()
+    float as_number(void)
     {
         if (type == L2C_integer)
         {
@@ -124,30 +174,61 @@ struct L2CValue
         return raw_float;
     }
     
-    void* as_pointer()
+    void* as_pointer(void)
     {
-        return raw_pointer;
+        if (type == L2C_pointer)
+            return raw_pointer;
+
+        return nullptr;
     }
     
-    L2CTable* as_table()
+    L2CTable* as_table(void)
     {
-        return raw_table;
+        if (type == L2C_table)
+            return raw_table;
+
+        return nullptr;
     }
     
-    L2CInnerFunctionBase* as_inner_function()
+    L2CInnerFunctionBase* as_inner_function(void)
     {
-        return raw_innerfunc;
+        if (type == L2C_inner_function)
+            return raw_innerfunc;
+
+        return nullptr;
     }
     
-    uint64_t as_hash()
+    uint64_t as_hash(void)
     {
-        return raw & 0xFFFFFFFFFF;
+        if (type == L2C_hash || type == L2C_integer)
+            return raw & 0xFFFFFFFFFF;
+
+        return 0;
     }
     
-    /*const char* as_string()
+    const char* as_string(void)
     {
-        return raw_string.c_str();
-    }*/
+        if (type == L2C_string)
+        {
+            return raw_string->c_str();
+        }
+
+        return "";
+    }
+    
+    uint64_t length(void)
+    {
+        if (type == L2C_string)
+        {
+            return raw_string->length();
+        }
+        else if (type == L2C_table)
+        {
+            return 0; //TODO
+        }
+        
+        return 0;
+    }
 };
 
 struct L2CAgent

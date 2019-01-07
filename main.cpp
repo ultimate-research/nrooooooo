@@ -5,6 +5,7 @@
 #include <iostream>
 #include <filesystem>
 #include <list>
+#include <algorithm>
 #include <elf.h>
 #include <cxxabi.h>
 #include "crc32.h"
@@ -16,8 +17,9 @@ std::map<std::string, uint64_t> unresolved_syms;
 std::map<uint64_t, std::string> unresolved_syms_rev;
 std::map<std::string, uint64_t> resolved_syms;
 std::map<std::pair<uint64_t, uint64_t>, uint64_t> function_hashes;
-std::set<L2C_Token> tokens;
+std::map<uint64_t, std::set<L2C_Token> > tokens;
 std::map<uint64_t, bool> converge_points;
+std::unordered_set<uint64_t> blocks;
 
 bool syms_scanned = false;
 bool trace_code = true;
@@ -426,14 +428,63 @@ void hook_code(uc_engine *uc, uint64_t address, uint32_t size, uc_inst* inst)
     last_pc[0] = address;
 }
 
+void remove_matching_tokens(uint64_t addr, std::string name)
+{
+    for (auto& pair : tokens)
+    {
+        std::vector<L2C_Token> to_erase;
+        for (auto& t : pair.second)
+        {
+            if (t.pc == addr && t.func == name)
+            {
+                to_erase.push_back(t);
+            }
+        }
+
+        for (auto& t : to_erase)
+        {
+            pair.second.erase(t);
+        }
+    }
+}
+
+void add_subreplace_token(uint64_t block, L2C_Token token)
+{
+    remove_matching_tokens(token.pc, "SUB_BRANCH");
+
+    tokens[block].insert(token);
+}
+
+void add_token_by_prio(uint64_t block, L2C_Token token)
+{
+    for (auto& pair : tokens)
+    {
+        std::vector<L2C_Token> to_erase;
+        for (auto& t : pair.second)
+        {
+            if (t.pc == token.pc && t.func == token.func && token.fork_heirarchy.size() < t.fork_heirarchy.size())
+            {
+                to_erase.push_back(t);
+            }
+        }
+
+        for (auto& t : to_erase)
+        {
+            pair.second.erase(t);
+        }
+    }
+
+    tokens[block].insert(token);
+}
+
 void hook_import(uc_engine *uc, uint64_t address, uint32_t size, uc_inst* inst)
 {
     uint64_t lr, origin;
     std::string name = unresolved_syms_rev[address];
     
     uc_reg_read(uc, UC_ARM64_REG_LR, &lr);
-    origin = lr - 4;
-    printf(">>> Instance Id %u: Import '%s' from %llx, size %x\n", inst->get_id(), name.c_str(), origin, size);
+    origin = inst->get_last_jump();
+    printf(">>> Instance Id %u: Import '%s' from %llx, size %x, block %llx\n", inst->get_id(), name.c_str(), origin, size, inst->get_last_block());
     
     // Add token
     L2C_Token token;
@@ -448,13 +499,16 @@ void hook_import(uc_engine *uc, uint64_t address, uint32_t size, uc_inst* inst)
         // Too large a fork heirarchy just means one of the forks got ahead of the root
         // instance and the tokens will be replaced by correct values.
         bool should_term = false;
-        for (auto& t : tokens)
+        for (auto& pair : tokens)
         {
-            if (t.pc == origin && t.is_function)
+            for (auto& t : pair.second)
             {
-                if (token.fork_heirarchy.size() > t.fork_heirarchy.size())
+                if (t.pc == origin && t.is_function)
                 {
-                    should_term = true;
+                    if (token.fork_heirarchy.size() > t.fork_heirarchy.size())
+                    {
+                        should_term = true;
+                    }
                 }
             }
         }
@@ -464,7 +518,7 @@ void hook_import(uc_engine *uc, uint64_t address, uint32_t size, uc_inst* inst)
             printf(">>> Instance Id %u: Found convergence at %llx\n", inst->get_id(), origin);
             token.func = "CONV";
             token.is_function = false;
-            tokens.insert(token);
+            tokens[inst->get_last_block()].insert(token);
             inst->terminate();
             return;
         }
@@ -473,22 +527,25 @@ void hook_import(uc_engine *uc, uint64_t address, uint32_t size, uc_inst* inst)
     bool add_token = false;
     if (converge_points[origin])
     {
-        std::vector<L2C_Token> to_erase;
-        for (auto& t : tokens)
+        for (auto& pair : tokens)
         {
-            if (t.pc == origin && t.is_function)
+            std::vector<L2C_Token> to_erase;
+            for (auto& t : pair.second)
             {
-                if (token.fork_heirarchy.size() < t.fork_heirarchy.size())
+                if (t.pc == origin && t.is_function)
                 {
-                    to_erase.push_back(t);
-                    add_token = true;
+                    if (token.fork_heirarchy.size() < t.fork_heirarchy.size())
+                    {
+                        to_erase.push_back(t);
+                        add_token = true;
+                    }
                 }
             }
-        }
-        
-        for (auto& t : to_erase)
-        {
-            tokens.erase(t);
+            
+            for (auto& t : to_erase)
+            {
+                pair.second.erase(t);
+            }
         }
     }
     else
@@ -643,7 +700,7 @@ void hook_import(uc_engine *uc, uint64_t address, uint32_t size, uc_inst* inst)
              || name == "lib::L2CValue::operator<(lib::L2CValue const&) const")
     {
         if (add_token)
-            tokens.insert(token);
+            add_subreplace_token(inst->get_last_block(), token);
         add_token = false;
     
         args[0] = 1;
@@ -674,7 +731,7 @@ void hook_import(uc_engine *uc, uint64_t address, uint32_t size, uc_inst* inst)
     uc_reg_write(uc, UC_ARM64_REG_S8, &fargs[8]);
     
     if (add_token)
-        tokens.insert(token);
+        add_subreplace_token(inst->get_last_block(), token);
 }
 
 void hook_memrw(uc_engine *uc, uc_mem_type type, uint64_t addr, int size, int64_t value, uc_inst* inst)
@@ -719,6 +776,73 @@ bool hook_mem_invalid(uc_engine *uc, uc_mem_type type, uint64_t address, int siz
     }
 }
 
+void print_blocks(uint64_t func)
+{
+    std::map<uint64_t, bool> block_visited;
+    std::vector<uint64_t> block_list;
+    block_list.push_back(func);
+    block_visited[func] = true;
+    while(block_list.size())
+    {
+        uint64_t b = *(block_list.end() - 1);
+        block_list.pop_back();
+
+        if (!tokens[b].size()) continue;
+
+        printf("\nBlock %llx:\n", b);
+        for (auto t : tokens[b])
+        {
+            if (t.func == "SUB_BRANCH" || t.func == "DIV_FALSE" || t.func == "DIV_TRUE")
+            {
+                if (!block_visited[t.args[0]])
+                {
+                    block_list.push_back(t.args[0]);
+                    block_visited[t.args[0]] = true;
+                }
+            }
+        
+            for (auto i = 0; i < t.fork_heirarchy.size() - 1; i++)
+            {
+                printf("  ");
+            }
+
+            printf("%llx ", t.pc);
+            for (auto i = t.fork_heirarchy.size(); i > 0; i--)
+            {
+                printf("%i", t.fork_heirarchy[i-1]);
+                if (i > 1)
+                    printf("->");
+            }
+
+            printf(" %s", t.func.c_str());
+            
+            if (t.args.size())
+                printf(" args ");
+
+            for (auto i = 0; i < t.args.size(); i++)
+            {
+                printf("0x%llx", t.args[i]);
+                if (i < t.args.size() - 1)
+                    printf(", ");
+            }
+            
+            if (t.fargs.size())
+                printf(" fargs ");
+
+            for (auto i = 0; i < t.fargs.size(); i++)
+            {
+                printf("%f", t.fargs[i]);
+                if (i < t.fargs.size() - 1)
+                    printf(", ");
+            }
+            
+            printf("\n");
+        }
+        
+        std::sort(block_list.begin(), block_list.end(), std::greater<int>()); 
+    }
+}
+
 int main(int argc, char **argv, char **envp)
 {
     // lua2cpp::L2CFighterAnimcmdBase
@@ -734,13 +858,13 @@ int main(int argc, char **argv, char **envp)
 
     //TODO read syms
     printf("Running lua2cpp::create_agent_fighter_animcmd_effect_wolf...\n");
-    animcmd_effect = inst.uc_run_stuff(resolved_syms["lua2cpp::create_agent_fighter_animcmd_effect_wolf(phx::Hash40, app::BattleObject*, app::BattleObjectModuleAccessor*, lua_State*)"], x0, x1, x2, x3);
+    animcmd_effect = inst.uc_run_stuff(resolved_syms["lua2cpp::create_agent_fighter_animcmd_effect_wolf(phx::Hash40, app::BattleObject*, app::BattleObjectModuleAccessor*, lua_State*)"], false, x0, x1, x2, x3);
     printf("Running lua2cpp::create_agent_fighter_animcmd_expression_wolf...\n");
-    animcmd_expression = inst.uc_run_stuff(resolved_syms["lua2cpp::create_agent_fighter_animcmd_expression_wolf(phx::Hash40, app::BattleObject*, app::BattleObjectModuleAccessor*, lua_State*)"], x0, x1, x2, x3);
+    animcmd_expression = inst.uc_run_stuff(resolved_syms["lua2cpp::create_agent_fighter_animcmd_expression_wolf(phx::Hash40, app::BattleObject*, app::BattleObjectModuleAccessor*, lua_State*)"], false, x0, x1, x2, x3);
     printf("Running lua2cpp::create_agent_fighter_animcmd_game_wolf...\n");
-    animcmd_game = inst.uc_run_stuff(resolved_syms["lua2cpp::create_agent_fighter_animcmd_game_wolf(phx::Hash40, app::BattleObject*, app::BattleObjectModuleAccessor*, lua_State*)"], x0, x1, x2, x3);
+    animcmd_game = inst.uc_run_stuff(resolved_syms["lua2cpp::create_agent_fighter_animcmd_game_wolf(phx::Hash40, app::BattleObject*, app::BattleObjectModuleAccessor*, lua_State*)"], false, x0, x1, x2, x3);
     printf("Running lua2cpp::create_agent_fighter_animcmd_sound_wolf...\n");
-    animcmd_sound = inst.uc_run_stuff(resolved_syms["lua2cpp::create_agent_fighter_animcmd_sound_wolf(phx::Hash40, app::BattleObject*, app::BattleObjectModuleAccessor*, lua_State*)"], x0, x1, x2, x3);
+    animcmd_sound = inst.uc_run_stuff(resolved_syms["lua2cpp::create_agent_fighter_animcmd_sound_wolf(phx::Hash40, app::BattleObject*, app::BattleObjectModuleAccessor*, lua_State*)"], false, x0, x1, x2, x3);
     
     // Set up L2CAgent
     uint64_t l2cagent = inst.heap_alloc(0x1000);
@@ -764,51 +888,17 @@ int main(int argc, char **argv, char **envp)
         inst.add_import_hook(addr);
     }
     
-    tokens = std::set<L2C_Token>();
+    tokens.clear();
+    blocks.clear();
     converge_points = std::map<uint64_t, bool>();
     
     uint64_t some_func = function_hashes[std::pair<uint64_t, uint64_t>(animcmd_effect, hash40("effect_landinglight", 19))];
-    inst.uc_run_stuff(some_func, l2cagent, 0xFFFA000000000000);
+    uint64_t some_func2 = function_hashes[std::pair<uint64_t, uint64_t>(animcmd_sound, 0x1692b4de28)];
+    //inst.uc_run_stuff(some_func, true, l2cagent, 0xFFFA000000000000);
+    inst.uc_run_stuff(some_func2, true, l2cagent, 0xFFFA000000000000);
     
-    for (auto t : tokens)
-    {
-        for (auto i = 0; i < t.fork_heirarchy.size() - 1; i++)
-        {
-            printf("  ");
-        }
-
-        printf("%llx ", t.pc);
-        for (auto i = t.fork_heirarchy.size(); i > 0; i--)
-        {
-            printf("%i", t.fork_heirarchy[i-1]);
-            if (i > 1)
-                printf("->");
-        }
-
-        printf(" %s", t.func.c_str());
-        
-        if (t.args.size())
-            printf(" args ");
-
-        for (auto i = 0; i < t.args.size(); i++)
-        {
-            printf("0x%x", t.args[i]);
-            if (i < t.args.size() - 1)
-                printf(", ");
-        }
-        
-        if (t.fargs.size())
-            printf(" fargs ");
-
-        for (auto i = 0; i < t.fargs.size(); i++)
-        {
-            printf("%f", t.fargs[i]);
-            if (i < t.fargs.size() - 1)
-                printf(", ");
-        }
-        
-        printf("\n");
-    }
+    //print_blocks(some_func);
+    print_blocks(some_func2);
 
     return 0;
 }

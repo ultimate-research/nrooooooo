@@ -5,6 +5,7 @@
 #include <vector>
 #include <map>
 #include <set>
+#include <unordered_set>
 #include "l2c.h"
 
 extern bool trace_code;
@@ -30,8 +31,11 @@ extern std::map<std::string, uint64_t> unresolved_syms;
 extern std::map<uint64_t, std::string> unresolved_syms_rev;
 extern std::map<std::string, uint64_t> resolved_syms;
 extern std::map<std::pair<uint64_t, uint64_t>, uint64_t> function_hashes;
-extern std::set<L2C_Token> tokens;
+extern std::map<uint64_t, std::set<L2C_Token> > tokens;
 extern std::map<uint64_t, bool> converge_points;
+extern std::unordered_set<uint64_t> blocks;
+
+extern void add_token_by_prio(uint64_t block, L2C_Token token);
 
 extern void nro_assignsyms(void* base);
 extern void nro_relocate(void* base);
