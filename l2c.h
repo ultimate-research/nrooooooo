@@ -25,6 +25,7 @@ struct L2C_Token
     L2C_TokenType type;
     std::vector<uint64_t> args;
     std::vector<float> fargs;
+    size_t block_depth;
     
     bool operator<(const L2C_Token& comp) const
     {
@@ -53,6 +54,55 @@ struct L2C_Token
         }
  
         return pc < comp.pc;
+    }
+    
+    std::string fork_heirarchy_str() const
+    {
+        std::string out = "";
+        
+        for (size_t i = fork_heirarchy.size(); i > 0; i--)
+        {
+            out += std::to_string(fork_heirarchy[i-1]);
+            if (i > 1)
+                out += "->";
+        }
+        
+        return out;
+    }
+    
+    void print()
+    {
+        for (size_t i = 0; i < fork_heirarchy.size() - 1; i++)
+        {
+            printf("  ");
+        }
+
+        printf("%" PRIx64 " %u ", pc, block_depth);
+        
+        printf("%s", fork_heirarchy_str().c_str());
+        printf(" %s", str.c_str());
+
+        if (args.size())
+            printf(" args ");
+
+        for (size_t i = 0; i < args.size(); i++)
+        {
+            printf("0x%" PRIx64 "", args[i]);
+            if (i < args.size() - 1)
+                printf(", ");
+        }
+
+        if (fargs.size())
+            printf(" fargs ");
+
+        for (auto i = 0; i < fargs.size(); i++)
+        {
+            printf("%f", fargs[i]);
+            if (i < fargs.size() - 1)
+                printf(", ");
+        }
+
+        printf("\n");
     }
 };
 
@@ -167,9 +217,9 @@ struct L2CValue
         return raw & 1;
     }
     
-    int as_integer(void)
+    int64_t as_integer(void)
     {
-        return (int)raw;
+        return (int64_t)raw;
     }
     
     float as_number(void)

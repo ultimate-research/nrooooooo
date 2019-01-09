@@ -30,10 +30,11 @@
 
 enum CodeBlockType
 {
+    CodeBlockType_Invalid = 0,
     CodeBlockType_Subroutine,
+    CodeBlockType_Goto,
     CodeBlockType_RetValSub,
     CodeBlockType_Fork,
-    CodeBlockType_Invalid,
 };
 
 struct CodeBlock
@@ -44,9 +45,17 @@ struct CodeBlock
     std::string typestr()
     {
         std::string typestr = "<unk>";
-        if (type == CodeBlockType_Subroutine)
+        if (type == CodeBlockType_Invalid)
+        {
+            typestr = "Invalid";
+        }
+        else if (type == CodeBlockType_Subroutine)
         {
             typestr = "Subroutine";
+        }
+        else if (type == CodeBlockType_Goto)
+        {
+            typestr = "Goto";
         }
         else if (type == CodeBlockType_RetValSub)
         {
@@ -71,13 +80,14 @@ private:
     uint64_t heap_size = 0;
     void* stack;
     
-    uc_inst* fork;
+    std::vector<uc_inst*> forks;
     uc_inst* parent;
-    uint64_t fork_divergence = 0;
     uint64_t start_addr = 0;
-    bool fork_is_new = false;
+    uint64_t end_addr = 0;
+    uint64_t outputted_tokens = 0;
     
     bool slow;
+    bool temp_simple = false;
     bool uc_term;
     int instance_id;
     
@@ -97,7 +107,6 @@ public:
         heap = malloc(HEAP_SIZE);
         imports = malloc(IMPORTS_SIZE);
         
-        fork = nullptr;
         parent = nullptr;
         uc_term = false;
 
@@ -123,7 +132,6 @@ public:
         heap = malloc(HEAP_SIZE);
         imports = malloc(IMPORTS_SIZE);
         
-        fork = nullptr;
         parent = to_clone;
         uc_term = false;
         
@@ -136,6 +144,7 @@ public:
         lua_active_vars = to_clone->lua_active_vars;
         block_stack = to_clone->block_stack;
         slow = to_clone->slow;
+        temp_simple = to_clone->temp_simple;
         reg_history = to_clone->reg_history;
         jump_history = to_clone->jump_history;
         
@@ -155,14 +164,15 @@ public:
         }
 
         uc_write_reg_state(uc, &regs);
-        
-        start_addr = get_pc();
     }
     
     ~uc_inst()
     {
-        if (fork) delete fork;
-        fork = nullptr;
+        for (auto fork : forks)
+        {
+            if (fork) delete fork;
+        }
+        forks.clear();
         
         uc_mem_unmap(uc, STACK, STACK_SIZE);
         uc_mem_unmap(uc, IMPORTS, IMPORTS_SIZE);
@@ -183,7 +193,21 @@ public:
     
     void fork_complete()
     {
-        uc_err err = UC_ERR_OK;
+        for (auto fork : forks)
+        {
+            uc_err err = UC_ERR_OK;
+            while (fork && !err && !fork->is_term())
+            {
+                err = fork->uc_run_slice();
+            }
+            
+            fork->fork_complete();
+            
+            if (fork) delete fork;
+        }
+        forks.clear();
+
+        /*uc_err err = UC_ERR_OK;
         while (fork && !err && !fork->is_term())
         {
             err = fork->uc_run_slice();
@@ -192,18 +216,23 @@ public:
         if (fork) delete fork;
         fork = nullptr;
         
-        fork_divergence = 0;
+        fork_divergence = 0;*/
     }
     
-    void fork_inst()
+    void fork_inst(bool independent = false)
     {
-        fork_complete();
+        //fork_complete();
         if (is_term()) return;
 
-        fork = new uc_inst(this);
+        uc_inst* fork = new uc_inst(this);
+        if (independent)
+        {
+            fork->set_start_addr(fork->get_pc());
+            fork->set_end_addr(fork->get_lr());
+        }
 
-        printf_verbose("Instance Id %u forked to Instance Id %u\n", get_id(), fork->get_id());
-        fork_is_new = true;
+        printf_verbose("Instance Id %u forked to Instance Id %u, start=%llx, end=%llx\n", get_id(), fork->get_id(), fork->get_start_addr(), fork->get_end_addr());
+        forks.push_back(fork);
     }
     
     void uc_reg_init()
@@ -247,7 +276,7 @@ public:
         // granular hooks
         //uc_hook_add(uc, &trace1, UC_HOOK_CODE, (void*)hook_code, this, 1, 0);
         uc_hook_add(uc, &trace2, UC_HOOK_MEM_UNMAPPED, (void*)hook_mem_invalid, this, 1, 0);
-        uc_hook_add(uc, &trace3, UC_HOOK_MEM_WRITE | UC_HOOK_MEM_READ, (void*)hook_memrw, this, 1, 0);
+        //uc_hook_add(uc, &trace3, UC_HOOK_MEM_WRITE | UC_HOOK_MEM_READ, (void*)hook_memrw, this, 1, 0);
         
         uc_mem_map_ptr(uc, NRO, NRO_SIZE, UC_PROT_ALL, nro);
         uc_mem_map_ptr(uc, HEAP, HEAP_SIZE, UC_PROT_ALL, heap);
@@ -274,11 +303,67 @@ public:
             reg_history.pop_back();
         }
 
-        int instrs = (fork || parent || slow) ? 1 : 0;
+        int instrs = (parent || slow) ? 1 : 0;
         uint32_t exec_instr = 0;
         if (uc_ptr_to_real_ptr(get_pc()))
         {
             exec_instr = *(uint32_t*)uc_ptr_to_real_ptr(get_pc());
+        }
+        
+        bool placed_fork = false;
+        for (auto fork : forks)
+        {
+            if (fork->get_start_addr() || fork->is_term()) continue;
+
+            if (fork->get_pc() != get_pc() /*&& get_pc() != MAGIC_IMPORT*/)
+            {
+                //fork_divergence = start_pc;
+                printf_verbose("Instance Id %u: Fork %u diverged from %" PRIx64 " to %" PRIx64 ", PC @ %" PRIx64 "\n", get_id(), fork->get_id(), reg_history[1].pc, fork->get_pc(), get_pc());
+                
+                fork->set_start_addr(fork->get_pc());
+
+                L2C_Token token;
+                token.pc = reg_history[1].pc;
+                token.fork_heirarchy = get_fork_heirarchy();
+                token.block_depth = block_stack_depth();
+                token.str = "DIV_FALSE";
+                token.type = L2C_TokenType_Meta;
+                token.args.push_back(get_pc());
+                add_token_by_prio(this, get_current_block(), token);
+                
+                token.str = "DIV_TRUE";
+                token.type = L2C_TokenType_Meta;
+                token.args.clear();
+                token.args.push_back(fork->get_pc());
+                add_token_by_prio(this, get_current_block(), token);
+                
+                is_fork_origin[reg_history[1].pc] = true;
+                //converge_points[get_pc()] = true;
+                
+                if (get_current_block_type() == CodeBlockType_Fork)
+                {
+                    pop_block(true);
+                    fork->pop_block(true);
+                }
+
+                push_block(CodeBlockType_Fork);
+                fork->push_block(CodeBlockType_Fork);
+                //print_blockchain();
+                //fork->print_blockchain();
+                
+                placed_fork = true;
+            }
+            else
+            {
+                fork->uc_run_slice();
+            }
+        }
+        
+        if (start_pc == end_addr)
+        {
+            printf_info("Instance Id %u ran to completion.\n", get_id());
+            uc_term = true;
+            return err;
         }
 
         err = uc_emu_start(uc, start_pc, 0, 0, instrs);
@@ -306,47 +391,130 @@ public:
             }
         }
         
-        if (is_basic_emu()) return err;
+        if (!slow) return err;
         
-        bool placed_goto = false;
-        if (get_pc() - start_pc != 4 && get_lr() == start_lr && get_pc() != get_lr() && get_pc() < start_pc && slow)
+        if (reg_history.size() > 2 
+            && reg_history[0].pc - reg_history[1].pc != 4 // there's a jump...
+            && reg_history[0].lr == reg_history[1].lr // but not a BL
+            && reg_history[0].pc != reg_history[0].lr // and not a RET
+            && (reg_history[0].pc >= NRO && reg_history[0].pc < NRO + NRO_SIZE) // and not an import call
+            && reg_history[0].sp == reg_history[1].sp // and it's not some function prologue thing
+            //&& !(reg_history[0].pc == get_current_block() && get_current_block_type() == CodeBlockType_RetValSub) // not a RETBRANCH
+            )
         {
-            printf_verbose("Instance %u: Loop branch detected PC @ %" PRIx64 ", prev %" PRIx64 " lr %" PRIx64 "\n", get_id(), get_pc(), start_pc, get_lr());
+            if (!is_fork_origin[reg_history[1].pc] && !is_basic_emu())
+            {
+                printf_verbose("Instance %u: Goto branch detected PC @ %" PRIx64 ", prev %" PRIx64 " lr %" PRIx64 "\n", get_id(), reg_history[0].pc, reg_history[1].pc, reg_history[0].lr);
 
-            L2C_Token token;
-            
-            token.pc = get_jump_history(0);
-            token.fork_heirarchy = get_fork_heirarchy();
-            token.str = "SUB_GOTO";
-            token.type = L2C_TokenType_Branch;
-            token.args.push_back(get_pc());
-            add_token_by_prio(get_current_block(), token);
+                L2C_Token token;
 
-            push_block(CodeBlockType_RetValSub);
-            push_jump(start_pc);
+                token.pc = reg_history[1].pc;
+                token.fork_heirarchy = get_fork_heirarchy();
+                token.block_depth = block_stack_depth();
+                token.str = "SUB_GOTO";
+                token.type = L2C_TokenType_Branch;
+                token.args.push_back(reg_history[0].pc);
+                add_token_by_prio(this, get_current_block(), token);
+
+                //TODO: if the GOTO lands in the middle of a block, split it
+
+                push_block(CodeBlockType_Goto, 1);
+                push_jump(reg_history[1].pc);
+            }
             
-            placed_goto = true;
+            if (is_goto_dst[reg_history[0].pc] && reg_history[0].pc < reg_history[1].pc)
+            {
+                printf_verbose("Instance %u: Definitely in a loop!\n", get_id());
+                uc_term = true;
+                
+                if (is_basic_emu()) return err;
+                
+                std::vector<L2C_Token> to_erase;
+                
+                // Prune all extra tokens in the GOTO's block which exist in other blocks
+                for(auto& pair : tokens)
+                {
+                    if (pair.first == reg_history[0].pc) continue;
+                        
+                    for (auto& tcomp : pair.second)
+                    {
+                        for(auto& t : tokens[reg_history[0].pc])
+                        {
+                            if (tcomp.pc == t.pc && t.str != "LOOPCONV")
+                            {
+                                printf_verbose("pruning %llx %s\n", t.pc, t.str.c_str());
+                                to_erase.push_back(t);
+                            }
+                        }
+                    }
+                }
+
+                for (auto& t : to_erase)
+                {
+                    tokens[reg_history[0].pc].erase(t);
+                }
+                
+                // Find the next closest block that the GOTO block will proceed to
+                uint64_t largest_token = 0;
+                for(auto& t : tokens[reg_history[0].pc])
+                {
+                    if (t.pc > largest_token)
+                    {
+                        largest_token = t.pc;
+                     }
+                }
+                
+                
+
+                L2C_Token token;
+
+                token.pc = largest_token;
+                token.fork_heirarchy = get_fork_heirarchy();
+                token.block_depth = block_stack_depth();
+                token.str = "LOOPCONV";
+                token.type = L2C_TokenType_Meta;
+                token.args.push_back(next_closest_block(reg_history[0].pc, largest_token));
+                add_token_by_prio(this, get_current_block(), token);
+                
+                return err;
+            }
+
+            is_goto_dst[reg_history[0].pc] = true;
         }
 
-        if (get_pc() - start_pc != 4 && get_lr() == start_lr && get_pc() != get_lr() && reg_history[1].sp < reg_history[0].sp)
+        /*if (get_pc() - start_pc != 4 
+            && get_lr() == start_lr 
+            && get_pc() != get_lr() 
+            && reg_history[1].sp < reg_history[0].sp)
         {
-            printf_verbose("Instance %u: Retval branch detected PC @ %" PRIx64 ", prev %" PRIx64 " lr %" PRIx64 "\n", get_id(), get_pc(), start_pc, get_lr());
+            printf_verbose("Instance %u: Retval branch detected PC @ %" PRIx64 ", prev %" PRIx64 " lr %" PRIx64 " prev % " PRIx64 "\n", get_id(), get_pc(), start_pc, get_lr(), start_lr);
             L2C_Token token;
             
-            token.pc = get_jump_history(0);
+            token.pc = start_pc;
             token.fork_heirarchy = get_fork_heirarchy();
+            token.block_depth = block_stack_depth();
             token.str = "SUB_RETBRANCH";
             token.type = L2C_TokenType_Branch;
             token.args.push_back(get_pc());
-            if (!converge_points[token.pc])
+            //if (!converge_points[token.pc] && !is_basic_emu())
             {
-                add_token_by_prio(get_current_block(), token);
+                add_token_by_prio(this, get_current_block(), token);
                 //converge_points[token.pc] = true;
             }
+            
+            // Since subroutines can get called multiple times, blocks must be invalidated
+            // to avoid convergence on forks
+            invalidate_blocktree(this, get_pc());
 
             push_block(CodeBlockType_RetValSub);
             push_jump(start_pc);
-        }
+
+            if (!is_basic_emu())
+            {
+                //fork_inst(true);
+                //temp_simple = true;
+            }
+        }*/
         
         if (get_pc() - start_pc != 4 && get_lr() != start_lr)
         {
@@ -355,17 +523,28 @@ public:
             
             token.pc = get_lr() ? get_lr() - 4 : 0;
             token.fork_heirarchy = get_fork_heirarchy();
+            token.block_depth = block_stack_depth();
             token.str = "SUB_BRANCH";
             token.type = L2C_TokenType_Branch;
             token.args.push_back(get_pc());
             if (!converge_points[token.pc])
             {
-                add_token_by_prio(get_current_block(), token);
+                add_token_by_prio(this, get_current_block(), token);
                 //converge_points[token.pc] = true;
             }
+            
+            // Since subroutines can get called multiple times, blocks must be invalidated
+            // to avoid convergence on forks
+            invalidate_blocktree(this, get_pc());
 
             push_block();
             push_jump(start_pc);
+            
+            if (!is_basic_emu())
+            {
+                //fork_inst(true);
+                //temp_simple = true;
+            }
         }
         
         if (exec_instr == INSTR_RET)
@@ -374,6 +553,7 @@ public:
             L2C_Token token;
             token.pc = start_pc;
             token.fork_heirarchy = get_fork_heirarchy();
+            token.block_depth = block_stack_depth();
             token.str = "SUB_RET";
             token.type = L2C_TokenType_Meta;
  
@@ -381,63 +561,10 @@ public:
 
             pop_block();
             
-            token.args.push_back(get_current_block());
-            token.args.push_back(get_pc());
-            add_token_by_prio(current, token);
+            //token.args.push_back(get_current_block());
+            //token.args.push_back(get_pc());
+            add_token_by_prio(this, current, token);
         }
-
-        if (fork && !fork->is_term() && !fork_is_new)
-        {
-            fork->uc_run_slice();
-
-            // Check when fork is diverging
-            if (!fork_divergence && fork->get_pc() != get_pc() && get_pc() != MAGIC_IMPORT)
-            {
-                fork_divergence = start_pc;
-                printf_verbose("Instance Id %u: Fork %u diverged from %" PRIx64 " to %" PRIx64 ", PC @ %" PRIx64 "\n", get_id(), fork->get_id(), start_pc, fork->get_pc(), get_pc());
-                
-                if (placed_goto)
-                {
-                    pop_block(true);
-                    remove_matching_tokens(get_jump_history(1), "SUB_GOTO");
-                }
-                
-                L2C_Token token;
-                token.pc = start_pc;
-                token.fork_heirarchy = get_fork_heirarchy();
-                token.str = "DIV_FALSE";
-                token.type = L2C_TokenType_Meta;
-                token.args.push_back(get_pc());
-                add_token_by_prio(get_current_block(), token);
-                
-                token.str = "DIV_TRUE";
-                token.type = L2C_TokenType_Meta;
-                token.args.clear();
-                token.args.push_back(fork->get_pc());
-                add_token_by_prio(get_current_block(), token);
-                
-                
-                converge_points[get_pc()] = true;
-                
-                if (get_current_block_type() == CodeBlockType_Fork)
-                {
-                    pop_block(true);
-                    fork->pop_block(true);
-                }
-
-                push_block(CodeBlockType_Fork);
-                fork->push_block(CodeBlockType_Fork);
-                //print_blockchain();
-                //fork->print_blockchain();
-            }
-        }
-        
-        if (fork && fork->is_term())
-        {
-            fork_complete();
-        }
-        
-        fork_is_new = false;
 
         return err;
     }
@@ -465,13 +592,15 @@ public:
         jump_history.clear();
         block_stack.clear();
         parent = nullptr;
-        fork = nullptr;
+        //fork = nullptr;
+        forks.clear();
         instance_id_cnt = 1;
 
         push_jump(start);
         block_stack.push_back({CodeBlockType_Invalid, 0});
         block_stack.push_back({CodeBlockType_Subroutine, start});
         blocks.insert(start);
+        block_types[start] = get_current_block_type();
         start_addr = start;
 
         printf_info("Instance Id %u: Starting emulation of %" PRIx64 "\n", get_id(), start);
@@ -486,6 +615,7 @@ public:
         
         // Finish fork's work if it exists
         fork_complete();
+        clean_blocks(start);
         
         printf_info("Instance Id %u: Emulation of %" PRIx64 " is complete.\n", get_id(), start);
 
@@ -582,20 +712,9 @@ public:
         return lr;
     }
     
-    bool has_diverged()
+    bool has_parent()
     {
-        if (fork && fork->fork_divergence)
-            return true;
-
-        return fork_divergence;
-    }
-    
-    bool parent_diverged()
-    {
-        if (parent && parent->fork_divergence)
-            return true;
-
-        return false;
+        return parent != nullptr;
     }
     
     std::vector<int> get_fork_heirarchy()
@@ -682,13 +801,18 @@ public:
         return (block_stack.end() - 2)->type;
     }
     
-    void push_block(CodeBlockType type = CodeBlockType_Subroutine)
+    void push_block(CodeBlockType type = CodeBlockType_Subroutine, int backlog = 0)
     {
         if (!slow) return;
 
-        CodeBlock b = {type, get_pc()};
+        CodeBlock b = {type, backlog ? reg_history[backlog-1].pc : get_pc()};
         //printf("Instance %u: Push block %" PRIx64 ", type %s\n", get_id(), b.addr, b.typestr().c_str());
+        
         blocks.insert(b.addr);
+        if (block_types[b.addr] == CodeBlockType_Invalid)
+        {
+            block_types[b.addr] = type;
+        }
         block_stack.push_back(b);
     }
     
@@ -705,6 +829,7 @@ public:
         // Previous subroutine block should be discarded too
         if (!single
             && (get_current_block_type() == CodeBlockType_RetValSub
+                || get_current_block_type() == CodeBlockType_Goto
                 || get_current_block_type() == CodeBlockType_Fork))
         {
             block_stack.pop_back();
@@ -720,6 +845,11 @@ public:
         //printf("Instance Id %u: Block popped to %" PRIx64 "\n", get_id(), get_current_block());
     }
     
+    size_t block_stack_depth()
+    {
+        return block_stack.size();
+    }
+    
     void print_blockchain()
     {
         printf("Instance %u block chain:\n", get_id());
@@ -733,7 +863,37 @@ public:
     
     bool is_basic_emu()
     {
-        return !slow;
+        return !slow || temp_simple;
+    }
+    
+    uint64_t get_start_addr()
+    {
+        return start_addr;
+    }
+    
+    void set_start_addr(uint64_t addr)
+    {
+        start_addr = addr;
+    }
+    
+    uint64_t get_end_addr()
+    {
+        return end_addr;
+    }
+    
+    void set_end_addr(uint64_t addr)
+    {
+        end_addr = addr;
+    }
+    
+    uint64_t num_outputted_tokens()
+    {
+        return outputted_tokens;
+    }
+    
+    void inc_outputted_tokens()
+    {
+        outputted_tokens++;
     }
 };
 

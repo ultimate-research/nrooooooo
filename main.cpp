@@ -21,6 +21,10 @@ std::map<std::pair<uint64_t, uint64_t>, uint64_t> function_hashes;
 std::map<uint64_t, std::set<L2C_Token> > tokens;
 std::map<uint64_t, bool> converge_points;
 std::unordered_set<uint64_t> blocks;
+std::map<uint64_t, int> block_types;
+
+std::map<uint64_t, bool> is_goto_dst;
+std::map<uint64_t, bool> is_fork_origin;
 
 std::map<uint64_t, uint64_t> hash_cheat;
 std::map<uint64_t, uint64_t> hash_cheat_rev;
@@ -445,13 +449,23 @@ void remove_matching_tokens(uint64_t addr, std::string str)
     }
 }
 
-void purge_markers(uint64_t addr)
+bool token_by_addr_and_name_exists(uint64_t pc, std::string str)
 {
-    remove_matching_tokens(addr, "SUB_BRANCH");
-    remove_matching_tokens(addr, "SUB_RETBRANCH");
+    for (auto& pair : tokens)
+    {
+        for (auto& t : pair.second)
+        {
+            if (t.pc == pc && t.str == str)
+            {
+                return true;
+            }
+        }
+    }
+    
+    return false;
 }
 
-void add_token_by_prio(uint64_t block, L2C_Token token)
+void add_token_by_prio(uc_inst* inst, uint64_t block, L2C_Token token)
 {
     for (auto& pair : tokens)
     {
@@ -462,9 +476,13 @@ void add_token_by_prio(uint64_t block, L2C_Token token)
             {
                 to_erase.push_back(t);
             }
-            else if (t.pc == token.pc && t.str == token.str && token.fork_heirarchy.size() == t.fork_heirarchy.size() && t.fork_heirarchy[0] >= token.fork_heirarchy[0])
+            else if (t.pc == token.pc && t.str == token.str && token.fork_heirarchy.size() == t.fork_heirarchy.size() && t.fork_heirarchy[0] > token.fork_heirarchy[0])
             {
                 to_erase.push_back(t);
+            }
+            else if (t.pc == token.pc && t.str == token.str && token.fork_heirarchy.size() > t.fork_heirarchy.size())
+            {
+                return;
             }
         }
 
@@ -474,15 +492,49 @@ void add_token_by_prio(uint64_t block, L2C_Token token)
         }
     }
 
+    //token.print();
+
     tokens[block].insert(token);
+    inst->inc_outputted_tokens();
 }
 
-void add_subreplace_token(uint64_t block, L2C_Token token)
+void add_subreplace_token(uc_inst* inst, uint64_t block, L2C_Token token)
 {
-    purge_markers(token.pc);
+    remove_matching_tokens(token.pc, "SUB_BRANCH");
+    remove_matching_tokens(token.pc, "SUB_GOTO");
 
     //tokens[block].insert(token);
-    add_token_by_prio(block, token);
+    add_token_by_prio(inst, block, token);
+}
+
+uint64_t next_closest_block(uint64_t curblock, uint64_t pc)
+{
+    uint64_t closest_next_block = 0;
+    for(auto& pair : tokens)
+    {
+        if (pair.first == curblock) continue;
+        
+        if (pair.first == pc)
+            return pair.first;
+        
+        uint64_t diff1 = 0;
+        uint64_t diff2 = 0;
+        
+        if (pair.first < pc)
+            diff1 = pc - pair.first;
+        else
+            diff1 = pair.first - pc;
+        
+        if (closest_next_block < pc)
+            diff2 = pc - closest_next_block;
+        else
+            diff2 = closest_next_block - pc;
+        
+        if (diff1 < diff2 || !closest_next_block)
+            closest_next_block = pair.first;
+    }
+    
+    return closest_next_block;
 }
 
 void hook_import(uc_engine *uc, uint64_t address, uint32_t size, uc_inst* inst)
@@ -498,15 +550,17 @@ void hook_import(uc_engine *uc, uint64_t address, uint32_t size, uc_inst* inst)
     L2C_Token token;
     token.pc = origin;
     token.fork_heirarchy = inst->get_fork_heirarchy();
+    token.block_depth = inst->block_stack_depth() - 1; // Imports are generally under a branch block
     token.str = name;
     token.type = L2C_TokenType_Func;
 
-    if (!inst->is_basic_emu() && converge_points[origin] && !inst->has_diverged() && inst->parent_diverged())
+    if (!inst->is_basic_emu() && converge_points[origin] && inst->has_parent() && inst->get_start_addr())
     {
         // Don't terminate if the token at the convergence point has a larger fork heirarchy
         // Too large a fork heirarchy just means one of the forks got ahead of the root
         // instance and the tokens will be replaced by correct values.
         bool should_term = false;
+        uint64_t term_block = 0;
         for (auto& pair : tokens)
         {
             for (auto& t : pair.second)
@@ -519,57 +573,40 @@ void hook_import(uc_engine *uc, uint64_t address, uint32_t size, uc_inst* inst)
                     {
                         //printf("doconv %u: %llx %s\n", inst->get_id(), t.pc, t.str.c_str());
                         should_term = true;
+                        term_block = pair.first;
                     }
                     else if (token.fork_heirarchy.size() == t.fork_heirarchy.size())
                     {
                         should_term = token.fork_heirarchy[0] >= t.fork_heirarchy[0];
+                        term_block = pair.first;
                     }
                 }
+                
+                if (should_term) break;
             }
+            if (should_term) break;
         }
         
         if (should_term)
         {
-            printf_debug("Instance Id %u: Found convergence at %" PRIx64 "\n", inst->get_id(), origin);
+            printf_debug("Instance Id %u: Found convergence at %" PRIx64 ", outputted %u tokens\n", inst->get_id(), origin, inst->num_outputted_tokens());
             
-            // We jumped backwards before this, loop?
-            if (inst->get_jump_history(1) > inst->get_jump_history(0))
+            //TODO: split blocks
+            if (inst->get_last_block() != term_block)
             {
-                token.pc = inst->get_jump_history(1);
-                token.args.push_back(inst->get_jump_history(0));
+                printf_warn("Instance Id %u: Convergence block is not the same as current block (%" PRIx64 ", %" PRIx64 ")...\n", inst->get_id(), inst->get_last_block(), term_block);
             }
             
             token.str = "CONV";
             token.type = L2C_TokenType_Meta;
-            add_token_by_prio(inst->get_last_block(), token);
-            inst->terminate();
-            return;
-        }
-    }
-    
-    if (!inst->is_basic_emu() && converge_points[origin] && inst->parent_id() == -1)
-    {
-        // Don't terminate if the token at the convergence point has a larger fork heirarchy
-        // Too large a fork heirarchy just means one of the forks got ahead of the root
-        // instance and the tokens will be replaced by correct values.
-        bool should_term = false;
-        for (auto& pair : tokens)
-        {
-            for (auto& t : pair.second)
-            {
-                if (t.pc == origin && token.fork_heirarchy == t.fork_heirarchy && token.str == t.str)
-                {
-                    should_term = true;
-                }
-            }
-        }
-        
-        if (should_term)
-        {
-            printf_debug("Instance Id %u: Found loop at %" PRIx64 "\n", inst->get_id(), origin);
-            token.str = "LOOPCONV";
-            token.type = L2C_TokenType_Meta;
-            add_token_by_prio(inst->get_last_block(), token);
+            
+            token.args.push_back(origin);
+            token.args.push_back(term_block);
+            //token.args.push_back(next_closest_block(inst->get_last_block(), origin));
+            
+            // Sometimes we get branches which just do nothing, pretend they don't exist
+            if (inst->num_outputted_tokens())
+                add_token_by_prio(inst, inst->get_last_block(), token);
             inst->terminate();
             return;
         }
@@ -963,16 +1000,26 @@ void hook_import(uc_engine *uc, uint64_t address, uint32_t size, uc_inst* inst)
              || name == "lib::L2CValue::operator<(lib::L2CValue const&) const")
     {
         //TODO basic emu comparisons
-    
-        if (add_token)
-            add_subreplace_token(inst->get_last_block(), token);
-        add_token = false;
+        if (inst->is_basic_emu())
+        {
+            L2CValue* in = (L2CValue*)inst->uc_ptr_to_real_ptr(args[0]);
+            if (in)
+                args[0] = in->as_bool();
+            else
+                args[0] = 0;
+        }
+        else
+        {
+            if (add_token)
+                add_subreplace_token(inst, inst->get_last_block(), token);
+            add_token = false;
 
-        args[0] = 1;
-        uc_reg_write(uc, UC_ARM64_REG_X0, &args[0]);    
-        inst->fork_inst();
+            args[0] = 1;
+            uc_reg_write(uc, UC_ARM64_REG_X0, &args[0]);    
+            inst->fork_inst();
 
-        args[0] = 0;
+            args[0] = 0;
+        }
     }
 
     uc_reg_write(uc, UC_ARM64_REG_X0, &args[0]);
@@ -996,7 +1043,7 @@ void hook_import(uc_engine *uc, uint64_t address, uint32_t size, uc_inst* inst)
     uc_reg_write(uc, UC_ARM64_REG_S8, &fargs[8]);
     
     if (add_token)
-        add_subreplace_token(inst->get_last_block(), token);
+        add_subreplace_token(inst, inst->get_last_block(), token);
 }
 
 void hook_memrw(uc_engine *uc, uc_mem_type type, uint64_t addr, int size, int64_t value, uc_inst* inst)
@@ -1039,6 +1086,71 @@ bool hook_mem_invalid(uc_engine *uc, uc_mem_type type, uint64_t address, int siz
     }
 }
 
+void clean_blocks(uint64_t func)
+{
+    std::map<uint64_t, bool> block_visited;
+    std::vector<uint64_t> block_list;
+    block_list.push_back(func);
+    block_visited[func] = true;
+    
+    std::map<std::string, int> fork_token_instances;
+    
+    while(block_list.size())
+    {
+        uint64_t b = *(block_list.end() - 1);
+        block_list.pop_back();
+
+        if (!tokens[b].size()) continue;
+
+        for (auto t : tokens[b])
+        {
+            if (t.str == "SUB_BRANCH" || t.str == "SUB_RETBRANCH" || t.str == "SUB_GOTO" || t.str == "DIV_FALSE" || t.str == "DIV_TRUE" || t.str == "CONV" || t.str == "LOOPCONV")
+            {
+                if (!block_visited[t.args[0]])
+                {
+                    block_list.push_back(t.args[0]);
+                    block_visited[t.args[0]] = true;
+                }
+            }
+        
+            fork_token_instances[t.fork_heirarchy_str()]++;
+        }
+        
+        std::sort(block_list.begin(), block_list.end(), std::greater<int>()); 
+    }
+    
+    for (auto& map_pair : fork_token_instances)
+    {
+        if (map_pair.second > 1) continue;
+
+        for (auto& block_pair : tokens)
+        {
+            auto& block = block_pair.first;
+            auto& block_tokens = block_pair.second;
+
+            std::vector<L2C_Token> to_remove;
+            for (auto& token : block_tokens)
+            {
+                std::string forkstr = token.fork_heirarchy_str();
+                if (forkstr == map_pair.first && token.str == "CONV")
+                {
+                    to_remove.push_back(token);
+                }
+            }
+
+            for (auto& token : to_remove)
+            {
+                if (logmask_is_set(LOGMASK_DEBUG))
+                {
+                    printf_debug("Pruning ");
+                    token.print();
+                }
+                block_tokens.erase(token);
+            }
+        }
+    }
+}
+
 void print_blocks(uint64_t func)
 {
     std::map<uint64_t, bool> block_visited;
@@ -1052,10 +1164,10 @@ void print_blocks(uint64_t func)
 
         if (!tokens[b].size()) continue;
 
-        printf("\nBlock %" PRIx64 ":\n", b);
+        printf("\nBlock %" PRIx64 " %u:\n", b, block_types[b]);
         for (auto t : tokens[b])
         {
-            if (t.str == "SUB_BRANCH" || t.str == "SUB_RETBRANCH" || t.str == "SUB_GOTO" || t.str == "SUB_RET" || t.str == "DIV_FALSE" || t.str == "DIV_TRUE")
+            if (t.str == "SUB_BRANCH" || t.str == "SUB_RETBRANCH" || t.str == "SUB_GOTO" || t.str == "DIV_FALSE" || t.str == "DIV_TRUE" || t.str == "CONV" || t.str == "LOOPCONV")
             {
                 if (!block_visited[t.args[0]])
                 {
@@ -1064,46 +1176,58 @@ void print_blocks(uint64_t func)
                 }
             }
         
-            for (size_t i = 0; i < t.fork_heirarchy.size() - 1; i++)
-            {
-                printf("  ");
-            }
-
-            printf("%" PRIx64 " ", t.pc);
-            for (size_t i = t.fork_heirarchy.size(); i > 0; i--)
-            {
-                printf("%i", t.fork_heirarchy[i-1]);
-                if (i > 1)
-                    printf("->");
-            }
-
-            printf(" %s", t.str.c_str());
-            
-            if (t.args.size())
-                printf(" args ");
-
-            for (size_t i = 0; i < t.args.size(); i++)
-            {
-                printf("0x%" PRIx64 "", t.args[i]);
-                if (i < t.args.size() - 1)
-                    printf(", ");
-            }
-            
-            if (t.fargs.size())
-                printf(" fargs ");
-
-            for (auto i = 0; i < t.fargs.size(); i++)
-            {
-                printf("%f", t.fargs[i]);
-                if (i < t.fargs.size() - 1)
-                    printf(", ");
-            }
-            
-            printf("\n");
+            t.print();
         }
         
         std::sort(block_list.begin(), block_list.end(), std::greater<int>()); 
     }
+}
+
+void invalidate_blocktree(uc_inst* inst, uint64_t func)
+{
+    std::map<uint64_t, bool> block_visited;
+    std::vector<uint64_t> block_list;
+    block_list.push_back(func);
+    block_visited[func] = true;
+
+    while(block_list.size())
+    {
+        uint64_t b = *(block_list.end() - 1);
+        block_list.pop_back();
+
+        if (!tokens[b].size()) continue;
+
+        for (auto t : tokens[b])
+        {
+            if (t.str == "SUB_BRANCH" || t.str == "SUB_RETBRANCH" || t.str == "SUB_GOTO" || t.str == "DIV_FALSE" || t.str == "DIV_TRUE" || t.str == "CONV" || t.str == "LOOPCONV")
+            {
+                if (!block_visited[t.args[0]])
+                {
+                    block_list.push_back(t.args[0]);
+                    block_visited[t.args[0]] = true;
+                }
+            }
+        }
+        
+        std::sort(block_list.begin(), block_list.end(), std::greater<int>());
+    }
+    
+    for (auto& pair : block_visited)
+    {
+        printf_verbose("Instance %u: Invalidated block %" PRIx64 " (type %u) from chain %" PRIx64 "\n", inst->get_id(), pair.first, block_types[pair.first], func);
+    
+        for (auto& t : tokens[pair.first])
+        {
+            converge_points[t.pc] = false;
+            is_goto_dst[t.pc] = false;
+            is_fork_origin[t.pc] = false;
+        }
+    
+        tokens[pair.first].clear();
+        blocks.erase(pair.first);
+        block_types[pair.first] = CodeBlockType_Invalid;
+    }
+    printf_verbose("Instance %u: Invalidated %u block(s)\n", inst->get_id(), block_visited.size());
 }
 
 int main(int argc, char **argv, char **envp)
@@ -1158,6 +1282,9 @@ int main(int argc, char **argv, char **envp)
 
                     tokens.clear();
                     blocks.clear();
+                    block_types.clear();
+                    is_goto_dst.clear();
+                    is_fork_origin.clear();
                     converge_points = std::map<uint64_t, bool>();
                     
                     inst.uc_run_stuff(func, true, output);
@@ -1167,6 +1294,7 @@ int main(int argc, char **argv, char **envp)
         }
     }
     //logmask_set(LOGMASK_DEBUG | LOGMASK_INFO);
+    //logmask_set(LOGMASK_VERBOSE);
 
     // Set up L2CAgent
     uint64_t l2cagent = inst.heap_alloc(0x1000);
@@ -1210,7 +1338,8 @@ int main(int argc, char **argv, char **envp)
         auto regpair = pair.first;
         auto funcptr = pair.second;
   
-        if (regpair.first == l2cagents[character + "_status_script"])
+        //if (regpair.first == l2cagents[character + "_status_script"])
+        //if (regpair.first == l2cagents[character + "_animcmd_sound"])
         {
             // String centering stuff
             
@@ -1229,6 +1358,9 @@ int main(int argc, char **argv, char **envp)
             
             tokens.clear();
             blocks.clear();
+            block_types.clear();
+            is_goto_dst.clear();
+            is_fork_origin.clear();
             converge_points = std::map<uint64_t, bool>();
             
             inst.uc_run_stuff(funcptr, true, l2cagent, 0xFFFA000000000000);
@@ -1240,15 +1372,24 @@ int main(int argc, char **argv, char **envp)
         
     tokens.clear();
     blocks.clear();
+    block_types.clear();
+    is_goto_dst.clear();
+    is_fork_origin.clear();
     converge_points = std::map<uint64_t, bool>();
     
-    uint64_t some_func = function_hashes[std::pair<uint64_t, uint64_t>(animcmd_effect, hash40("effect_landinglight", 19))];
-    uint64_t some_func2 = function_hashes[std::pair<uint64_t, uint64_t>(animcmd_sound, 0x1692b4de28)];
+    // return function as branch
+    uint64_t some_func = function_hashes[std::pair<uint64_t, uint64_t>(l2cagents[character + "_animcmd_effect"], hash40("effect_landinglight", 19))];
     //inst.uc_run_stuff(some_func, true, l2cagent, 0xFFFA000000000000);
-    //inst.uc_run_stuff(some_func2, true, l2cagent, 0xFFFA000000000000);
-    
     //print_blocks(some_func);
+    
+    // while stuff
+    uint64_t some_func2 = function_hashes[std::pair<uint64_t, uint64_t>(l2cagents[character + "_animcmd_sound"], 0x1692b4de28)];
+    //inst.uc_run_stuff(some_func2, true, l2cagent, 0xFFFA000000000000);
     //print_blocks(some_func2);
+    
+    // subroutines w/ ifs
+    //inst.uc_run_stuff(0x10011a470, true, l2cagent, 0xFFFA000000000000);
+    //print_blocks(0x10011a470);
 
     return 0;
 }

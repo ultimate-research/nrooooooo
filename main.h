@@ -25,7 +25,6 @@ typedef struct uc_reg_state
 
 class uc_inst;
 
-
 extern int instance_id_cnt;
 extern std::map<std::string, uint64_t> unresolved_syms;
 extern std::map<uint64_t, std::string> unresolved_syms_rev;
@@ -34,9 +33,17 @@ extern std::map<std::pair<uint64_t, uint64_t>, uint64_t> function_hashes;
 extern std::map<uint64_t, std::set<L2C_Token> > tokens;
 extern std::map<uint64_t, bool> converge_points;
 extern std::unordered_set<uint64_t> blocks;
+extern std::map<uint64_t, int> block_types;
 
-extern void add_token_by_prio(uint64_t block, L2C_Token token);
+extern std::map<uint64_t, bool> is_goto_dst;
+extern std::map<uint64_t, bool> is_fork_origin;
+
+extern void add_token_by_prio(uc_inst* inst, uint64_t block, L2C_Token token);
 extern void remove_matching_tokens(uint64_t addr, std::string str);
+extern bool token_by_addr_and_name_exists(uint64_t pc, std::string str);
+extern uint64_t next_closest_block(uint64_t curblock, uint64_t pc);
+extern void invalidate_blocktree(uc_inst* inst, uint64_t func);
+extern void clean_blocks(uint64_t func);
 
 extern void nro_assignsyms(void* base);
 extern void nro_relocate(void* base);
