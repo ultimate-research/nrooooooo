@@ -129,6 +129,7 @@ std::string characters[] = {
     "younglink",
     "zelda",
     "zenigame",
+    "common",
 };
 
 std::string status_func[] = {
@@ -1453,6 +1454,12 @@ void init_character_objects()
     std::vector<std::string> zenigame_objs;
     zenigame_objs.push_back("zenigame");
     character_objects["zenigame"] = zenigame_objs;
+    
+    std::vector<std::string> common_objs;
+    common_objs.push_back("common");
+    common_objs.push_back("fighter_common");
+    common_objs.push_back("base");
+    character_objects["common"] = common_objs;
 }
 
 struct nso_header
@@ -1482,7 +1489,7 @@ void nro_assignsyms(void* base)
     
     struct nso_header* header = (struct nso_header*)base;
     struct mod0_header* modheader = (struct mod0_header*)(base + header->mod);
-    dyn = (const Elf64_Dyn*)((void*)modheader + modheader->dynamic);
+    dyn = (const Elf64_Dyn*)(base + header->mod + modheader->dynamic);
     
     //parse_eh(base, header->mod + modheader->unwind_start);
     
@@ -1534,6 +1541,10 @@ void nro_assignsyms(void* base)
         {
             resolved_syms[std::string(demangled)] = NRO + symtab[i].st_value;
         }
+        else
+        {
+
+        }
         free(demangled);
     }
     
@@ -1567,7 +1578,7 @@ void nro_relocate(void* base)
                 rela = (const Elf64_Rela*)(base + dyn->d_un.d_ptr);
                 break;
             case DT_RELASZ:
-                relasz = dyn->d_un.d_val / sizeof(Elf64_Rela);
+                relasz += dyn->d_un.d_val / sizeof(Elf64_Rela);
                 break;
             case DT_PLTRELSZ:
                 relasz += dyn->d_un.d_val / sizeof(Elf64_Rela);
@@ -1607,7 +1618,10 @@ void nro_relocate(void* base)
                 if (demangled)
                 {
                     //printf("@ %" PRIx64 ", %s -> %" PRIx64 ", %" PRIx64 "\n", NRO + rela->r_offset, demangled, unresolved_syms[std::string(demangled)], *ptr);
-                    *ptr = unresolved_syms[std::string(demangled)];
+                    if (resolved_syms[std::string(demangled)])
+                        *ptr = resolved_syms[std::string(demangled)];
+                    else
+                        *ptr = unresolved_syms[std::string(demangled)];
                     free(demangled);
                 }
                 break;
@@ -2690,12 +2704,12 @@ std::string print_block(uint64_t b)
 {
     char tmp[256];
     std::string out = "";
-    if (block_printed[b])
+    /*if (block_printed[b])
     {
         snprintf(tmp, 255, "\nBlock %" PRIx64 " type %u, size %x, %u tokens, creation %s: See earlier definition\n", blocks[b].hash(), blocks[b].type, blocks[b].size(), blocks[b].num_tokens(), blocks[b].fork_hierarchy_str().c_str());
         out += std::string(tmp);
         return out;
-    }
+    }*/
 
     //snprintf(tmp, 255, "\nBlock %" PRIx64 " (end %" PRIx64 ") type %u, size %x, %u tokens, creation %s:\n", b, blocks[b].addr_end, blocks[b].type, blocks[b].size(), blocks[b].num_tokens(), blocks[b].fork_hierarchy_str().c_str());
     snprintf(tmp, 255, "\nBlock %" PRIx64 " type %u, size %x, %u tokens, creation %s:\n", blocks[b].hash(), blocks[b].type, blocks[b].size(), blocks[b].num_tokens(), blocks[b].fork_hierarchy_str().c_str());
@@ -2895,6 +2909,7 @@ int main(int argc, char **argv, char **envp)
             
             x0 = hash40(hashstr.c_str(), hashstr.length()); // Hash40
             uint64_t funcptr = resolved_syms[func + args];
+            if (!funcptr) continue;
             
             printf_debug("Running %s(hash40(%s) => 0x%08x, ...)...\n", func.c_str(), hashstr.c_str(), x0);
             uint64_t output = inst.uc_run_stuff(funcptr, false, false, x0, x1, x2, x3);
@@ -3009,9 +3024,6 @@ int main(int argc, char **argv, char **envp)
             }
             else
             {
-                out += "               ";
-                snprintf(tmp, 255, "%10" PRIx64, hash);
-                out += std::string(tmp) + "\n";
                 func_name = unhash[hash];
                 for (int i = 0; i < 20 - (func_name.length() / 2); i++)
                 {
@@ -3026,6 +3038,8 @@ int main(int argc, char **argv, char **envp)
             is_goto_dst.clear();
             is_fork_origin.clear();
             converge_points = std::map<uint64_t, bool>();
+            
+            printf("%s/%s %" PRIx64 "\n", agent_name.c_str(), func_name.c_str()), funcptr;
             
             //printf("%s %10" PRIx64 " %8" PRIx64 "\n", l2cagents_rev[regpair.first].c_str(), hash, funcptr);
             inst.uc_run_stuff(funcptr, true, true, regpair.first, 0xFFFA000000000000);
@@ -3042,7 +3056,7 @@ int main(int argc, char **argv, char **envp)
 //#if 0
             out += "<-------------------------------------->\n";
 //#endif
-            printf("%s\n", out.c_str());
+            //printf("%s\n", out.c_str());
             
             std::string in = std::string(argv[1]);
             std::string dir_out = in.substr(0, in.find_last_of(".")) + "_out/" + agent_name;
@@ -3052,15 +3066,13 @@ int main(int argc, char **argv, char **envp)
                 std::filesystem::create_directories(dir_out);
                 std::ofstream file(file_out);
                 file << out;
-                out = "";
             }
             catch (std::exception& e) 
             {
                 std::cout << e.what() << std::endl;
             }
             
-            //FILE* f = 
-            
+            out = "";
         }
     }
     

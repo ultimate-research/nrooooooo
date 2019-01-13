@@ -10,10 +10,10 @@
 
 // memory addresses for different segments
 #define NRO 0x100000000
-#define NRO_SIZE (0x800000)
+#define NRO_SIZE (0x880000)
 
 #define IMPORTS 0xEEEE000000000000
-#define IMPORTS_SIZE (0x50000)
+#define IMPORTS_SIZE (0x100000)
 
 #define HEAP 0xBBBB000000000000
 #define HEAP_SIZE (0x200000)
