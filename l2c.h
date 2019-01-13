@@ -2,8 +2,15 @@
 #define L2C_H
 
 #include <vector>
+#include <map>
+#include <set>
+
+#include "useful.h"
+#include "crc32.h"
 
 struct L2CValue;
+struct L2C_Token;
+extern std::map<uint64_t, std::set<L2C_Token> > tokens;
 
 struct Hash40
 {
@@ -12,26 +19,28 @@ struct Hash40
 
 enum L2C_TokenType
 {
-    L2C_TokenType_Func = 0,
-    L2C_TokenType_Branch = 1,
-    L2C_TokenType_Meta = 2,
+    L2C_TokenType_Invalid = 0,
+    L2C_TokenType_Func = 1,
+    L2C_TokenType_Branch = 2,
+    L2C_TokenType_Meta = 3,
 };
 
 struct L2C_Token
 {
     uint64_t pc;
-    std::vector<int> fork_heirarchy;
+    std::vector<int> fork_hierarchy;
     std::string str;
     L2C_TokenType type;
     std::vector<uint64_t> args;
     std::vector<float> fargs;
-    size_t block_depth;
+    
+    L2C_Token() : pc(0), fork_hierarchy(), str(""), type(L2C_TokenType_Invalid), args(), fargs() {}
     
     bool operator<(const L2C_Token& comp) const
     {
         if (pc == comp.pc) 
         {
-            if (fork_heirarchy == comp.fork_heirarchy)
+            if (fork_hierarchy == comp.fork_hierarchy)
             {
                 if (type == comp.type)
                 {
@@ -50,19 +59,19 @@ struct L2C_Token
                 return type < comp.type;
             }
             
-            return fork_heirarchy < comp.fork_heirarchy;
+            return fork_hierarchy < comp.fork_hierarchy;
         }
  
         return pc < comp.pc;
     }
     
-    std::string fork_heirarchy_str() const
+    std::string fork_hierarchy_str() const
     {
         std::string out = "";
         
-        for (size_t i = fork_heirarchy.size(); i > 0; i--)
+        for (size_t i = fork_hierarchy.size(); i > 0; i--)
         {
-            out += std::to_string(fork_heirarchy[i-1]);
+            out += std::to_string(fork_hierarchy[i-1]);
             if (i > 1)
                 out += "->";
         }
@@ -70,39 +79,122 @@ struct L2C_Token
         return out;
     }
     
-    void print()
+    void print(uint64_t rel = 0) const;
+};
+
+enum L2C_CodeBlockType
+{
+    L2C_CodeBlockType_Invalid = 0,
+    L2C_CodeBlockType_Subroutine,
+    L2C_CodeBlockType_Goto,
+    L2C_CodeBlockType_Fork,
+};
+
+struct L2C_CodeBlock
+{
+    uint64_t addr;
+    uint64_t addr_end;
+    L2C_CodeBlockType type;
+    std::vector<int> fork_hierarchy;
+    
+    uint64_t hash_stash;
+    
+    L2C_CodeBlock() : addr(0), addr_end(0), type(L2C_CodeBlockType_Invalid), hash_stash(0) {}
+    L2C_CodeBlock(uint64_t addr, L2C_CodeBlockType type, std::vector<int> fork_hierarchy) : addr(addr), addr_end(addr), type(type), fork_hierarchy(fork_hierarchy), hash_stash(0) {}
+    
+    uint64_t size()
     {
-        for (size_t i = 0; i < fork_heirarchy.size() - 1; i++)
+        return addr_end - addr;
+    }
+    
+    uint64_t num_tokens()
+    {
+        return tokens[addr].size();
+    }
+    
+    std::string typestr()
+    {
+        std::string typestr = "<unk>";
+        if (type == L2C_CodeBlockType_Invalid)
         {
-            printf("  ");
+            typestr = "Invalid";
         }
+        else if (type == L2C_CodeBlockType_Subroutine)
+        {
+            typestr = "Subroutine";
+        }
+        else if (type == L2C_CodeBlockType_Goto)
+        {
+            typestr = "Goto";
+        }
+        else if (type == L2C_CodeBlockType_Fork)
+        {
+            typestr = "Fork";
+        }
+        return typestr;
+    }
+    
+    int creator()
+    {
+        if (!fork_hierarchy.size()) return -1;
 
-        printf("%" PRIx64 " %u ", pc, block_depth);
+        return fork_hierarchy[0];
+    }
+    
+    std::string fork_hierarchy_str() const
+    {
+        std::string out = "";
         
-        printf("%s", fork_heirarchy_str().c_str());
-        printf(" %s", str.c_str());
-
-        if (args.size())
-            printf(" args ");
-
-        for (size_t i = 0; i < args.size(); i++)
+        for (size_t i = fork_hierarchy.size(); i > 0; i--)
         {
-            printf("0x%" PRIx64 "", args[i]);
-            if (i < args.size() - 1)
-                printf(", ");
+            out += std::to_string(fork_hierarchy[i-1]);
+            if (i > 1)
+                out += "->";
         }
+        
+        return out;
+    }
+    
+    bool convergable_block(std::vector<int> comp)
+    {
+        if (!fork_hierarchy.size()) return false;
+        if (fork_hierarchy.size() == 1 && comp.size() > 1) return true;
+        if (fork_hierarchy == comp && comp.size() == 1 && num_tokens()) return true;
 
-        if (fargs.size())
-            printf(" fargs ");
+        if (fork_hierarchy.size() == comp.size())
+            return creator() < comp[0];
 
-        for (auto i = 0; i < fargs.size(); i++)
+        return fork_hierarchy.size() < comp.size();
+    }
+    
+    uint64_t hash()
+    {
+        if ((hash_stash >> 32) == num_tokens()) return hash_stash;
+        
+        uint32_t crc = 0;
+        for (auto& token : tokens[addr])
         {
-            printf("%f", fargs[i]);
-            if (i < fargs.size() - 1)
-                printf(", ");
-        }
+            for (int val : token.fork_hierarchy)
+                crc = crc32_part(&val, 4, crc);
 
-        printf("\n");
+            crc = crc32_part(token.str.c_str(), token.str.length(), crc);
+            crc = crc32_part(&token.type, sizeof(token.type), crc);
+            if (token.str == "SUB_BRANCH" || token.str == "SUB_GOTO" || token.str == "DIV_FALSE" || token.str == "DIV_TRUE" || token.str == "CONV" || token.str == "BLOCK_MERGE" || token.str == "SPLIT_BLOCK_MERGE")
+            {
+
+            }
+            else
+            {
+                for (uint64_t arg : token.args)
+                    crc = crc32_part(&arg, sizeof(arg), crc);
+                
+                for (float farg : token.fargs)
+                    crc = crc32_part(&farg, sizeof(farg), crc);
+            }
+        }
+        
+        hash_stash = crc | (uint64_t)(num_tokens() << 32);
+        return hash_stash;
     }
 };
 
@@ -291,18 +383,18 @@ struct L2CValue
 
 struct L2CAgent
 {
-    uint64_t unk0;
-    uint64_t unk8;
+    uint64_t vtable;
+    uint64_t lua_state_agent;
     uint64_t unk10;
     uint64_t unk18;
     uint64_t unk20;
     uint64_t unk28;
     uint64_t unk30;
     uint64_t unk38;
-    uint64_t unkptr40;
+    uint64_t lua_state_agentbase;
 };
 
-struct L2CUnk40
+struct lua_State
 {
     uint64_t unk0;
     uint64_t unk8;
@@ -374,42 +466,42 @@ struct L2CUnk40
     uint64_t unk218;
 };
 
-struct L2CUnk40ptr48
+struct lua_Stateptr48
 {
     uint64_t vtable;
 };
 
-struct L2CUnk40ptr50
+struct lua_Stateptr50
 {
     uint64_t vtable;
 };
 
-struct L2CUnk40ptr98
+struct lua_Stateptr98
 {
     uint64_t vtable;
 };
 
-struct L2CUnk40ptrA0
+struct lua_StateptrA0
 {
     uint64_t vtable;
 };
 
-struct L2CUnk40ptrC8
+struct lua_StateptrC8
 {
     uint64_t vtable;
 };
 
-struct L2CUnk40ptr118
+struct lua_Stateptr118
 {
     uint64_t vtable;
 };
 
-struct L2CUnk40ptr158
+struct lua_Stateptr158
 {
     uint64_t vtable;
 };
 
-struct L2CUnk40ptr50Vtable
+struct lua_Stateptr50Vtable
 {
     uint64_t unk0;
     uint64_t unk8;

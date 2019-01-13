@@ -4,6 +4,7 @@
 #include <unicorn/unicorn.h>
 #include <vector>
 #include <map>
+#include <unordered_map>
 #include <set>
 #include <unordered_set>
 #include "l2c.h"
@@ -32,18 +33,18 @@ extern std::map<std::string, uint64_t> resolved_syms;
 extern std::map<std::pair<uint64_t, uint64_t>, uint64_t> function_hashes;
 extern std::map<uint64_t, std::set<L2C_Token> > tokens;
 extern std::map<uint64_t, bool> converge_points;
-extern std::unordered_set<uint64_t> blocks;
-extern std::map<uint64_t, int> block_types;
+extern std::map<uint64_t, L2C_CodeBlock> blocks;
 
 extern std::map<uint64_t, bool> is_goto_dst;
 extern std::map<uint64_t, bool> is_fork_origin;
 
 extern void add_token_by_prio(uc_inst* inst, uint64_t block, L2C_Token token);
 extern void remove_matching_tokens(uint64_t addr, std::string str);
+extern void remove_block_matching_tokens(uint64_t block, uint64_t addr, std::string str);
 extern bool token_by_addr_and_name_exists(uint64_t pc, std::string str);
-extern uint64_t next_closest_block(uint64_t curblock, uint64_t pc);
+extern uint64_t find_containing_block(uint64_t addr);
 extern void invalidate_blocktree(uc_inst* inst, uint64_t func);
-extern void clean_blocks(uint64_t func);
+extern void clean_and_verify_blocks(uint64_t func);
 
 extern void nro_assignsyms(void* base);
 extern void nro_relocate(void* base);

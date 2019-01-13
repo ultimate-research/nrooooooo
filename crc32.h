@@ -54,6 +54,15 @@ const uint32_t crc32_tab[] = {
 	0xb40bbe37, 0xc30c8ea1, 0x5a05df1b, 0x2d02ef8d
 };
 
+inline uint32_t crc32_part(const void *buf, size_t size, uint32_t crc)
+{
+	const uint8_t* p = (const uint8_t*)buf;
+	crc = crc ^ ~0U;
+	while (size--)
+		crc = crc32_tab[(crc ^ *p++) & 0xFF] ^ (crc >> 8);
+	return crc ^ ~0U;
+}
+
 inline uint32_t crc32(const void *buf, size_t size)
 {
 	const uint8_t* p = (const uint8_t*)buf;
