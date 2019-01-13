@@ -58,7 +58,7 @@ public:
     std::vector<L2CValue> lua_stack;
     std::map<uint64_t, L2CValue*> lua_active_vars;
 
-    uc_inst()
+    uc_inst(std::string nrofile)
     {
         // map and read memory
         nro = malloc(NRO_SIZE);
@@ -69,7 +69,7 @@ public:
         parent = nullptr;
         uc_term = false;
 
-        FILE* f_nro = fopen("lua2cpp_wolf.nro", "rb");
+        FILE* f_nro = fopen(nrofile.c_str(), "rb");
         fread(nro, NRO_SIZE, 1, f_nro);
         fclose(f_nro);
         
@@ -829,8 +829,7 @@ public:
                     }
                     else
                     {
-                        printf_error("Instance Id %u: Failed to assign token at %" PRIx64 " during split!\n", get_id(), token.pc);
-                        token.print();
+                        printf_error("Instance Id %u: Failed to assign token at %" PRIx64 " during split!\n%s", get_id(), token.pc, token.to_string());
                     }
                 }
                 

@@ -7,7 +7,7 @@ OUTPUT = nrooooooo
 CXXFLAGS = -Wall -g -I. -std=c++17
 CFLAGS = -I. -std=gnu11
 # If this fails, use "-pthread" instead of "-lpthread"
-LIBS = -lpthread -lunicorn
+LIBS = -lpthread -lunicorn -lstdc++fs
 CC = gcc
 # Note: requires a g++ that supports the -std=c++17 flag, if g++ in your path doesn't support
 #       C++17, update your g++ and possibly edit this to match the right version of g++

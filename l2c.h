@@ -79,7 +79,7 @@ struct L2C_Token
         return out;
     }
     
-    void print(uint64_t rel = 0) const;
+    std::string to_string(uint64_t rel = 0) const;
 };
 
 enum L2C_CodeBlockType
