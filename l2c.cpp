@@ -14,9 +14,9 @@ std::string L2C_Token::to_string(uint64_t rel) const
     //printf("%s%" PRIx64 " ", (rel ? "+" : ""), pc - rel);
     //if (rel)
     //    printf("b:%" PRIx64 "", blocks[rel].hash());
-    out += (rel ? "+" : "");
-    snprintf(tmp, 256, "%" PRIx64 " ", pc - rel);
-    out += std::string(tmp);
+    //out += (rel ? "+" : "");
+    //snprintf(tmp, 256, "%" PRIx64 " ", pc);
+    //out += std::string(tmp);
 
     //printf("%s", fork_hierarchy_str().c_str());
     out += " " + str;
@@ -51,6 +51,9 @@ std::string L2C_Token::to_string(uint64_t rel) const
         {
             snprintf(tmp, 256, "0x%" PRIx64 "", args[i]);
             out += std::string(tmp);
+            
+            if (unhash[args[i]] != "")
+                out += " (" + unhash[args[i]] + ")";
         }
 
         if (i < args.size() - 1)

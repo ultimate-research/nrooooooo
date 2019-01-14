@@ -27,6 +27,7 @@ typedef struct uc_reg_state
 class uc_inst;
 
 extern int instance_id_cnt;
+extern std::map<uint64_t, std::string> unhash;
 extern std::map<std::string, uint64_t> unresolved_syms;
 extern std::map<uint64_t, std::string> unresolved_syms_rev;
 extern std::map<std::string, uint64_t> resolved_syms;
@@ -44,7 +45,7 @@ extern void remove_block_matching_tokens(uint64_t block, uint64_t addr, std::str
 extern bool token_by_addr_and_name_exists(uint64_t pc, std::string str);
 extern uint64_t find_containing_block(uint64_t addr);
 extern void invalidate_blocktree(uc_inst* inst, uint64_t func);
-extern void clean_and_verify_blocks(uint64_t func);
+extern void clean_and_verify_blocks(uint64_t func, bool is_noreturn);
 
 extern void nro_assignsyms(void* base);
 extern void nro_relocate(void* base);

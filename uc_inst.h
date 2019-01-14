@@ -174,6 +174,8 @@ public:
     void fork_inst(bool independent = false)
     {
         if (is_term()) return;
+        
+        //TODO: link back to where the fork spawned from
 
         uc_inst* fork = new uc_inst(this);
         if (independent)
@@ -227,7 +229,7 @@ public:
         // granular hooks
         //uc_hook_add(uc, &trace1, UC_HOOK_CODE, (void*)hook_code, this, 1, 0);
         uc_hook_add(uc, &trace2, UC_HOOK_MEM_UNMAPPED, (void*)hook_mem_invalid, this, 1, 0);
-        //uc_hook_add(uc, &trace3, UC_HOOK_MEM_WRITE | UC_HOOK_MEM_READ, (void*)hook_memrw, this, 1, 0);
+        uc_hook_add(uc, &trace3, UC_HOOK_MEM_WRITE | UC_HOOK_MEM_READ, (void*)hook_memrw, this, 1, 0);
         
         uc_mem_map_ptr(uc, NRO, NRO_SIZE, UC_PROT_ALL, nro);
         uc_mem_map_ptr(uc, HEAP, HEAP_SIZE, UC_PROT_ALL, heap);
@@ -293,7 +295,7 @@ public:
                 
                 is_fork_origin[reg_history[1].pc] = true;
                 
-                if (get_current_block_type() == L2C_CodeBlockType_Fork)
+                if (get_current_block_type() == L2C_CodeBlockType_Fork || get_current_block_type() == L2C_CodeBlockType_Goto)
                 {
                     pop_block(true);
                     fork->pop_block(true);
@@ -350,6 +352,10 @@ public:
                 token.args.push_back(reg_history[0].pc);
                 add_token_by_prio(this, goto_block, token);
 
+                if (get_current_block_type() == L2C_CodeBlockType_Fork || get_current_block_type() == L2C_CodeBlockType_Goto)
+                {
+                    pop_block(true);
+                }
                 push_block(L2C_CodeBlockType_Goto);
                 push_jump(reg_history[1].pc);
                 
@@ -364,7 +370,8 @@ public:
             is_goto_dst[reg_history[0].pc] = true;
         }
 
-        if (slow && blocks[start_pc].type != L2C_CodeBlockType_Invalid
+        if (slow && !placed_fork
+            && blocks[start_pc].type != L2C_CodeBlockType_Invalid
             && start_pc != get_current_block())
         {
             printf_verbose("Instance Id %u: Crossed a block boundary at %" PRIx64 "! current_block=%" PRIx64 " creator=%i, type=%i\n", get_id(), start_pc, get_current_block(), blocks[start_pc].creator(), blocks[start_pc].type);
@@ -381,7 +388,7 @@ public:
             token.args.push_back(start_pc);
             add_token_by_prio(this, get_current_block(), token);
 
-            if (get_current_block_type() == L2C_CodeBlockType_Fork)
+            if (get_current_block_type() == L2C_CodeBlockType_Fork || get_current_block_type() == L2C_CodeBlockType_Goto)
                 pop_block(true);
 
             if (get_start_addr() && blocks[start_pc].convergable_block(get_fork_hierarchy()))
@@ -418,7 +425,7 @@ public:
 
                 pop_block();
                 
-                if (slow && get_pc() >= blocks[get_current_block()].addr_end)
+                if (slow && get_pc() > blocks[get_current_block()].addr_end && get_pc() - blocks[get_current_block()].addr_end == 4)
                     blocks[get_current_block()].addr_end = get_pc();
             }
             else if (get_pc() == 0 && get_sp() == STACK_END)
@@ -471,6 +478,7 @@ public:
  
             uint64_t current = get_current_block();
 
+            //print_blockchain();
             pop_block();
             
             //token.args.push_back(get_current_block());
@@ -540,9 +548,10 @@ public:
         fork_complete();
         
         // We terminated in the middle of the function...
+        bool is_noreturn = false;
         if (get_sp() != STACK_END && err == UC_ERR_OK)
         {
-            uint64_t nonreturning = get_current_block();
+            /*uint64_t nonreturning = get_current_block();
             while (get_current_block_type() != L2C_CodeBlockType_Subroutine)
             {
                 pop_block();
@@ -559,11 +568,12 @@ public:
             
             blocks[nonreturning].addr_end += 4;
 
-            add_token_by_prio(this, nonreturning, token);
+            add_token_by_prio(this, nonreturning, token);*/
+            is_noreturn = true;
         }
         
         // Clean any loose strands and check for oddities
-        clean_and_verify_blocks(start);
+        clean_and_verify_blocks(start, is_noreturn);
         
         printf_info("Instance Id %u: Emulation of %" PRIx64 " is complete.\n", get_id(), start);
 
@@ -818,16 +828,14 @@ public:
                         //printf("a ");
                         //token.print();
                     }
-                    else if ((token.pc >= b.addr && token.pc < b.addr_end) 
-                             || ((token.str == "BLOCK_MERGE" || token.str == "SPLIT_BLOCK_MERGE") 
-                                && token.pc == b.addr_end))
+                    else if (token.pc >= b.addr && token.pc < b.addr_end)
                     {
                         tokens[addr].insert(token);
                         
                         //printf("b ");
                         //token.print();
                     }
-                    else
+                    else if (!((token.str == "BLOCK_MERGE" || token.str == "SPLIT_BLOCK_MERGE") && token.pc == b.addr_end))
                     {
                         printf_error("Instance Id %u: Failed to assign token at %" PRIx64 " during split!\n%s", get_id(), token.pc, token.to_string());
                     }
@@ -922,6 +930,25 @@ public:
     void inc_outputted_tokens()
     {
         outputted_tokens++;
+    }
+    
+    void purge_forks_in_range(uint64_t start, uint64_t end)
+    {
+        for (auto fork : forks)
+        {
+            // We only want to kill forks which are pending if statements
+            // in a subroutine which has been left and re-entered by its
+            // parent.
+            if (!fork->get_start_addr()) continue;
+
+            if (fork->get_pc() >= start && fork->get_pc() < end 
+                || (start == end && fork->get_pc() == start))
+            {
+                printf_debug("Instance Id %u: Purging Instance Id %u for being in range %" PRIx64 " to %" PRIx64 "\n", get_id(), fork->get_id(), start, end);
+                fork->purge_forks_in_range(start, end);
+                fork->terminate();
+            }
+        }
     }
 };
 

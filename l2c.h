@@ -304,6 +304,12 @@ struct L2CValue
         raw_string = new std::string(val);
     }
     
+    L2CValue(L2CValue* val)
+    {
+        type = val->type;
+        raw = val->raw;
+    }
+    
     bool as_bool(void)
     {
         return raw & 1;

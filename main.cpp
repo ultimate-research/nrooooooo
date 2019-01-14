@@ -14,7 +14,10 @@
 #include "logging.h"
 #include "eh.h"
 
+std::set<uint32_t> last_crcs;
 std::map<uint64_t, std::string> unhash;
+std::map<uint32_t, std::string> unhash_parts;
+std::map<uint64_t, std::string> status_funcs;
 
 int instance_id_cnt = 0;
 int imports_size = 0;
@@ -1520,7 +1523,7 @@ void nro_assignsyms(void* base)
             std::string demangled_str = std::string(demangled);
             if (demangled_str == "phx::detail::CRC32Table::table_")
             {
-                import_size = 0x100;
+                import_size = sizeof(crc32_tab);
             }
             else if (demangled_str == "lib::L2CValue::NIL")
             {
@@ -2184,7 +2187,7 @@ void hook_import(uc_engine *uc, uint64_t address, uint32_t size, uc_inst* inst)
     }
     else if (name == "lib::L2CAgent::sv_set_function_hash(void*, phx::Hash40)")
     {
-        printf_info("Instance Id %u: lib::L2CAgent::sv_set_function_hash(0x%" PRIx64 ", 0x%" PRIx64 ", 0x%" PRIx64 ")\n", inst->get_id(), args[0], args[1], args[2]);
+        printf_info("Instance Id %u: lib::L2CAgent::sv_set_function_hash(0x%" PRIx64 ", 0x%" PRIx64 ", 0x%" PRIx64 ") %s\n", inst->get_id(), args[0], args[1], args[2], unhash[args[2]].c_str());
         
         function_hashes[std::pair<uint64_t, uint64_t>(args[0], args[2])] = args[1];
     }
@@ -2194,17 +2197,17 @@ void hook_import(uc_engine *uc, uint64_t address, uint32_t size, uc_inst* inst)
         L2CValue* b = (L2CValue*)inst->uc_ptr_to_real_ptr(args[2]);
         uint64_t funcptr = args[3];
         
-        uint64_t fakehash = a->raw << 32 | b->raw;
+        uint64_t statusconcat = a->raw << 32 | b->raw;
         std::string kind = fighter_status_kind[a->raw + 1];
         if (kind == "")
             kind = std::to_string(a->raw);
 
-        std::string unhash_str = kind + "__" + status_func[b->raw];
-        unhash[fakehash] = unhash_str;
+        std::string func_str = kind + "__" + status_func[b->raw];
+        status_funcs[statusconcat] = func_str;
         
-        printf("Instance Id %u: lua2cpp::L2CAgentBase::sv_set_status_func(0x%" PRIx64 ", 0x%" PRIx64 ", 0x%" PRIx64 ", 0x%" PRIx64 ") -> %s,%10" PRIx64 "\n", inst->get_id(), args[0], a->raw, b->raw, funcptr, unhash_str.c_str(), fakehash);
+        printf("Instance Id %u: lua2cpp::L2CAgentBase::sv_set_status_func(0x%" PRIx64 ", 0x%" PRIx64 ", 0x%" PRIx64 ", 0x%" PRIx64 ") -> %s,%10" PRIx64 "\n", inst->get_id(), args[0], a->raw, b->raw, funcptr, func_str.c_str(), statusconcat);
         
-        function_hashes[std::pair<uint64_t, uint64_t>(args[0], fakehash)] = funcptr;
+        function_hashes[std::pair<uint64_t, uint64_t>(args[0], statusconcat)] = funcptr;
     }
     else if (name == "lib::utility::Variadic::get_format() const")
     {
@@ -2220,7 +2223,7 @@ void hook_import(uc_engine *uc, uint64_t address, uint32_t size, uc_inst* inst)
     }
     else if (name == "app::sv_animcmd::frame(lua_State*, float)")
     {
-        token.args.push_back(args[0]);
+        //token.args.push_back(args[0]);
         token.fargs.push_back(fargs[0]);
 
         inst->lua_stack.push_back(L2CValue(true));
@@ -2358,6 +2361,28 @@ void hook_import(uc_engine *uc, uint64_t address, uint32_t size, uc_inst* inst)
         //add_token = false;
         //purge_markers(token.pc);
     }
+    else if (name == "lib::L2CValue::L2CValue(lib::L2CValue const&)")
+    {
+        L2CValue* var = (L2CValue*)inst->uc_ptr_to_real_ptr(args[0]);
+        L2CValue* var2 = (L2CValue*)inst->uc_ptr_to_real_ptr(args[1]);
+
+        if (var && var2)
+        {
+            *var = L2CValue(var2);
+
+            token.args.push_back(args[1]);
+            token.args.push_back(var2->type);
+        
+            if (var2->type == L2C_number)
+                token.fargs.push_back(var2->as_number());
+            else
+                token.args.push_back(var2->raw);
+        }
+        else
+            printf_error("Instance Id %u: Bad L2CValue init, %" PRIx64 ", %" PRIx64 ", %" PRIx64 "\n", inst->get_id(), args[0], args[1], origin);
+        
+
+    }
     else if (name == "lib::L2CValue::as_number() const")
     {
         L2CValue* var = (L2CValue*)inst->uc_ptr_to_real_ptr(args[0]);
@@ -2473,6 +2498,8 @@ void hook_import(uc_engine *uc, uint64_t address, uint32_t size, uc_inst* inst)
         printf_verbose("Hash cheating!! %llx\n", l2cval);
         
         args[0] = l2cval;
+        
+        token.args.push_back(args[1]);
     }
     else if (name == "lib::L2CValue::operator=(lib::L2CValue const&)")
     {
@@ -2547,18 +2574,131 @@ void hook_import(uc_engine *uc, uint64_t address, uint32_t size, uc_inst* inst)
         add_subreplace_token(inst, inst->get_last_block(), token);
 }
 
+uint32_t sp_part1, sp_part2;
+
 void hook_memrw(uc_engine *uc, uc_mem_type type, uint64_t addr, int size, int64_t value, uc_inst* inst)
 {
+    
+    uint32_t cur_crc, finding;
+    uint8_t crcidx, crcbyte;
     switch(type) 
     {
         default: break;
         case UC_MEM_READ:
-                 value = *(uint64_t*)(inst->uc_ptr_to_real_ptr(addr));
-                 printf_verbose("Instance Id %u: Memory is being READ at 0x%" PRIx64 ", data size = %u, data value = 0x%" PRIx64 "\n", inst->get_id(), addr, size, value);
-                 break;
+            value = *(uint64_t*)(inst->uc_ptr_to_real_ptr(addr));
+            printf_verbose("Instance Id %u: Memory is being READ at 0x%" PRIx64 ", data size = %u, data value = 0x%" PRIx64 "\n", inst->get_id(), addr, size, value);
+            
+            if (size == 4 && addr >= STACK && addr <= STACK_END)
+            {
+                uint32_t hash_maybe = *(uint32_t*)inst->uc_ptr_to_real_ptr(addr);
+                
+                if (hash_maybe < 0x100)
+                    sp_part1 = hash_maybe;
+                else
+                    sp_part2 = hash_maybe << 8;
+
+                if (unhash_parts[hash_maybe] != "")
+                {
+                    last_crcs.insert(hash_maybe);
+                    //printf("sp hash %08x %s\n", hash_maybe, unhash_parts[hash_maybe].c_str());
+                }
+                
+                hash_maybe = sp_part1 | sp_part2;
+                if (unhash_parts[hash_maybe] != "")
+                {
+                    last_crcs.insert(hash_maybe);
+                    //printf("sp hash %08x %s\n", hash_maybe, unhash_parts[hash_maybe].c_str());
+                }
+            }
+                 
+            if (addr >= unresolved_syms["phx::detail::CRC32Table::table_"] && addr < unresolved_syms["phx::detail::CRC32Table::table_"] + sizeof(crc32_tab))
+            {
+                crcidx = (addr - unresolved_syms["phx::detail::CRC32Table::table_"]) / 4;
+                uc_print_regs(uc);
+                
+                //printf("idx %x accessed\n", crcidx);
+                
+                std::set<uint32_t> potential_32_8s;
+                std::set<uint8_t> potential_8_0s;
+                std::set<uint32_t> potential_hash;
+                for (int i = UC_ARM64_REG_X0; i <= UC_ARM64_REG_X28; i++)
+                {
+                    uint64_t reg;
+                    uc_reg_read(uc, i, &reg);
+                    
+                    //if (reg >> 32 == 0)
+                    {
+                        uint8_t reg_inv = reg ^ 0xFF;
+                        if (unhash_parts[(uint32_t)reg] != "")
+                        {
+                            potential_hash.insert((uint32_t)reg);
+                            //printf("CRC32? %08x %s\n", (uint32_t)reg, unhash_parts[reg].c_str());
+                        }
+                        else if (unhash[reg] != "")
+                        {
+                            uint32_t inv = (uint32_t)(reg ^ ~0);
+                            potential_hash.insert(inv);
+                            //printf("CRC32? %08x %s\n", inv, unhash_parts[inv].c_str());
+                        }
+                        
+                        if (reg <= 0xFFFFFF)
+                            potential_32_8s.insert(reg);
+                        if (reg <= 0xFF)
+                            potential_8_0s.insert(reg);
+                    }
+                }
+                
+                for (uint32_t pot_32_8 : potential_32_8s)
+                {
+                    for (uint8_t pot_8_0 : potential_8_0s)
+                    {
+                        uint32_t hash = pot_32_8 << 8 | pot_8_0;
+                        if (unhash_parts[hash] != "")
+                        {
+                            potential_hash.insert(hash);
+                            //printf("CRC32? %08x %s\n", hash, unhash_parts[hash].c_str());
+                        }
+                    }
+                }
+                
+                potential_hash.insert(0xFFFFFFFF);
+                
+                for (uint32_t hash : last_crcs)
+                    potential_hash.insert(hash);
+                
+                last_crcs.clear();
+                for (uint32_t pot_last_crc : potential_hash)
+                {
+                    uint32_t cur_crc = crc32_tab[crcidx] ^ (pot_last_crc >> 8);
+                    finding = cur_crc ^ (pot_last_crc >> 8);
+                    for (int i = 0; i < 0x100; i++)
+                    {
+                        if (crc32_tab[i] == finding)
+                        {
+                            crcbyte = i ^ (uint8_t)pot_last_crc;
+                            if ((crcbyte >= 'a' && crcbyte <= 'z') || (crcbyte >= '0' && crcbyte <= '9') || crcbyte == '_')
+                            {
+                                if (unhash_parts[pot_last_crc] != "" || pot_last_crc == 0xFFFFFFFF)
+                                {
+                                    std::string cur_str = unhash_parts[pot_last_crc] + (char)crcbyte;
+                                    unhash_parts[cur_crc] = cur_str;
+                                    unhash[(uint32_t)(cur_crc ^ ~0) | cur_str.length() << 32] = cur_str;
+                                }
+
+                                //printf("last %x cur %x hashed %c %s\n", pot_last_crc, cur_crc, crcbyte, unhash_parts[cur_crc].c_str());
+                                
+                                last_crcs.insert(cur_crc);
+                            }
+                        }
+                    }
+                }
+                
+                //printf("CRC32 %08x %c (%x)\n", last_crc, crcidx, crcidx);
+            }
+            break;
         case UC_MEM_WRITE:
-                 printf_verbose("Instance Id %u: Memory is being WRITE at 0x%" PRIx64 ", data size = %u, data value = 0x%" PRIx64 "\n", inst->get_id(), addr, size, value);
-                 break;
+            printf_verbose("Instance Id %u: Memory is being WRITE at 0x%" PRIx64 ", data size = %u, data value = 0x%" PRIx64 "\n", inst->get_id(), addr, size, value);
+            break;
     }
     return;
 }
@@ -2587,7 +2727,7 @@ bool hook_mem_invalid(uc_engine *uc, uc_mem_type type, uint64_t address, int siz
     }
 }
 
-void clean_and_verify_blocks(uint64_t func)
+void clean_and_verify_blocks(uint64_t func, bool is_noreturn)
 {
     std::map<uint64_t, bool> block_visited;
     std::vector<uint64_t> block_list;
@@ -2656,11 +2796,16 @@ void clean_and_verify_blocks(uint64_t func)
         {
             if (addr_in_block[i])
                 printf_warn("Address range overlap at %" PRIx64 " in block %" PRIx64 "\n", i, b);
+
             addr_in_block[i] = true;
         }
         
-        if (!num_jumps)
+        // With is_noreturn, one missing exit token is permitted.
+        if (!num_jumps && !is_noreturn)
+        {
             printf_warn("Block %" PRIx64 " is missing an exit token!\n", b);
+            is_noreturn = false;
+        }
         else if (num_jumps > 1)
             printf_warn("Block %" PRIx64 " has too many exit tokens!\n", b);
         
@@ -2825,6 +2970,8 @@ void invalidate_blocktree(uc_inst* inst, uint64_t func)
     for (auto& pair : block_visited)
     {
         printf_verbose("Instance Id %u: Invalidated block %" PRIx64 " (type %u) from chain %" PRIx64 "\n", inst->get_id(), pair.first, blocks[pair.first].type, func);
+        
+        inst->purge_forks_in_range(blocks[pair.first].addr, blocks[pair.first].addr_end);
     
         for (uint64_t i = blocks[pair.first].addr; i < blocks[pair.first].addr_end; i++)
         {
@@ -2997,11 +3144,8 @@ int main(int argc, char **argv, char **envp)
         auto funcptr = pair.second;
         uint64_t hash = regpair.second;
   
-        //if (regpair.first == l2cagents[character + "_status_script"])
-        //if (regpair.first == l2cagents[character + "_animcmd_sound"])
-        //if (funcptr == 0x1000ffe20)
-        //if (funcptr == 0x1000eb140)
-        //if (funcptr == 0x100101a20)
+        //if (funcptr == 0x1000cb3b0)
+        //if (funcptr == 0x1000cc6d0)
         {
             // String centering stuff
 
@@ -3016,13 +3160,7 @@ int main(int argc, char **argv, char **envp)
             out += agent_name + "\n";
             
             std::string func_name;
-            if (unhash[hash] == "")
-            {
-                out += "               ";
-                snprintf(tmp, 255, "%10" PRIx64, hash);
-                func_name = std::string(tmp);
-            }
-            else
+            if (unhash[hash] != "")
             {
                 func_name = unhash[hash];
                 for (int i = 0; i < 20 - (func_name.length() / 2); i++)
@@ -3030,7 +3168,21 @@ int main(int argc, char **argv, char **envp)
                     out += " ";
                 }
             }
-            
+            else if (status_funcs[hash] != "")
+            {
+                func_name = status_funcs[hash];
+                for (int i = 0; i < 20 - (func_name.length() / 2); i++)
+                {
+                    out += " ";
+                }
+            }
+            else
+            {
+                out += "               ";
+                snprintf(tmp, 255, "%" PRIx64, hash);
+                func_name = std::string(tmp);
+            }
+
             out += func_name + "\n";
 //#endif
             //tokens.clear();
@@ -3039,7 +3191,7 @@ int main(int argc, char **argv, char **envp)
             is_fork_origin.clear();
             converge_points = std::map<uint64_t, bool>();
             
-            printf("%s/%s %" PRIx64 "\n", agent_name.c_str(), func_name.c_str()), funcptr;
+            printf("%s/%s %" PRIx64 "\n", agent_name.c_str(), func_name.c_str(), funcptr); 
             
             //printf("%s %10" PRIx64 " %8" PRIx64 "\n", l2cagents_rev[regpair.first].c_str(), hash, funcptr);
             inst.uc_run_stuff(funcptr, true, true, regpair.first, 0xFFFA000000000000);
