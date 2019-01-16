@@ -10,7 +10,7 @@
 
 struct L2CValue;
 struct L2C_Token;
-extern std::map<uint64_t, std::set<L2C_Token> > tokens;
+class ClusterManager;
 
 struct Hash40
 {
@@ -79,7 +79,7 @@ struct L2C_Token
         return out;
     }
     
-    std::string to_string(uint64_t rel = 0) const;
+    std::string to_string(ClusterManager* cluster, uint64_t rel = 0) const;
 };
 
 enum L2C_CodeBlockType
@@ -96,22 +96,15 @@ struct L2C_CodeBlock
     uint64_t addr_end;
     L2C_CodeBlockType type;
     std::vector<int> fork_hierarchy;
-    
-    uint64_t hash_stash;
-    
-    L2C_CodeBlock() : addr(0), addr_end(0), type(L2C_CodeBlockType_Invalid), hash_stash(0) {}
-    L2C_CodeBlock(uint64_t addr, L2C_CodeBlockType type, std::vector<int> fork_hierarchy) : addr(addr), addr_end(addr), type(type), fork_hierarchy(fork_hierarchy), hash_stash(0) {}
+
+    L2C_CodeBlock() : addr(0), addr_end(0), type(L2C_CodeBlockType_Invalid) {}
+    L2C_CodeBlock(uint64_t addr, L2C_CodeBlockType type, std::vector<int> fork_hierarchy) : addr(addr), addr_end(addr), type(type), fork_hierarchy(fork_hierarchy) {}
     
     uint64_t size()
     {
         return addr_end - addr;
     }
-    
-    uint64_t num_tokens()
-    {
-        return tokens[addr].size();
-    }
-    
+
     std::string typestr()
     {
         std::string typestr = "<unk>";
@@ -153,48 +146,6 @@ struct L2C_CodeBlock
         }
         
         return out;
-    }
-    
-    bool convergable_block(std::vector<int> comp)
-    {
-        if (!fork_hierarchy.size()) return false;
-        if (fork_hierarchy.size() == 1 && comp.size() > 1) return true;
-        if (fork_hierarchy == comp && comp.size() == 1 && num_tokens()) return true;
-
-        if (fork_hierarchy.size() == comp.size())
-            return creator() < comp[0];
-
-        return fork_hierarchy.size() < comp.size();
-    }
-    
-    uint64_t hash()
-    {
-        if ((hash_stash >> 32) == num_tokens()) return hash_stash;
-        
-        uint32_t crc = 0;
-        for (auto& token : tokens[addr])
-        {
-            for (int val : token.fork_hierarchy)
-                crc = crc32_part(&val, 4, crc);
-
-            crc = crc32_part(token.str.c_str(), token.str.length(), crc);
-            crc = crc32_part(&token.type, sizeof(token.type), crc);
-            if (token.str == "SUB_BRANCH" || token.str == "SUB_GOTO" || token.str == "DIV_FALSE" || token.str == "DIV_TRUE" || token.str == "CONV" || token.str == "BLOCK_MERGE" || token.str == "SPLIT_BLOCK_MERGE")
-            {
-
-            }
-            else
-            {
-                for (uint64_t arg : token.args)
-                    crc = crc32_part(&arg, sizeof(arg), crc);
-                
-                for (float farg : token.fargs)
-                    crc = crc32_part(&farg, sizeof(farg), crc);
-            }
-        }
-        
-        hash_stash = crc | (uint64_t)(num_tokens() << 32);
-        return hash_stash;
     }
 };
 

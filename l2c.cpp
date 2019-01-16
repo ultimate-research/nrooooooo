@@ -1,19 +1,20 @@
 #include "l2c.h"
 
 #include "main.h"
+#include "clustermanager.h"
 
-std::string L2C_Token::to_string(uint64_t rel) const
+std::string L2C_Token::to_string(ClusterManager* cluster, uint64_t rel) const
 {
     char tmp[256];
     std::string out = "";
-    for (size_t i = 0; i < fork_hierarchy.size() - 1; i++)
+    for (size_t i = 0; fork_hierarchy.size() && i < fork_hierarchy.size() - 1; i++)
     {
         out += "  ";
     }
 
     //printf("%s%" PRIx64 " ", (rel ? "+" : ""), pc - rel);
     //if (rel)
-    //    printf("b:%" PRIx64 "", blocks[rel].hash());
+    //    printf("b:%" PRIx64 "", cluster->block_hash(rel));
     //out += (rel ? "+" : "");
     //snprintf(tmp, 256, "%" PRIx64 " ", pc);
     //out += std::string(tmp);
@@ -44,7 +45,7 @@ std::string L2C_Token::to_string(uint64_t rel) const
             snprintf(tmp, 256, "%s0x%" PRIx64 "", (neg ? "-" : "+"), val);*/
             
             // Hash
-            snprintf(tmp, 256, "b:%" PRIx64 "", blocks[args[i]].hash());
+            snprintf(tmp, 256, "b:%" PRIx64 "", cluster->block_hash(args[i]));
             out += std::string(tmp);
         }
         else
