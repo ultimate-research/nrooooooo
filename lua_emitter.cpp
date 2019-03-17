@@ -77,7 +77,7 @@ void LuaBytecodeEmitter::FinalizeFunction()
     for (auto& instr : instructions)
     {
         Emit32(instr.raw);
-        printf("%x\n", instr.raw);
+        //printf("%x\n", instr.raw);
     }
     
     Emit32(constants.size()); // num constants
@@ -117,8 +117,6 @@ void LuaBytecodeEmitter::FinalizeFunction()
         }
     }
     
-    // emit constants
-    
     Emit32(upvalues.size()); // num upvalues
     
     for (auto& upval : upvalues)
@@ -134,8 +132,6 @@ void LuaBytecodeEmitter::FinalizeFunction()
         f.FinalizeFunction();
         EmitRaw(f.GetEmissions(), f.EmissionSize());
     }
-    
-    // emit function prototypes
     
     // debug stuff
     Emit32(0);
