@@ -16,8 +16,8 @@ std::string L2C_Token::to_string(ClusterManager* cluster, uint64_t rel) const
     //if (rel)
     //    printf("b:%" PRIx64 "", cluster->block_hash(rel));
     //out += (rel ? "+" : "");
-    //snprintf(tmp, 256, "%" PRIx64 " ", pc);
-    //out += std::string(tmp);
+    snprintf(tmp, 256, "%" PRIx64 " ", pc);
+    out += std::string(tmp);
 
     //printf("%s", fork_hierarchy_str().c_str());
     out += " " + str;

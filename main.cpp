@@ -18,6 +18,7 @@
 #include "constants.h"
 #include "clustermanager.h"
 #include "eh.h"
+#include "lua_transpile.h"
 
 #define MAX_CLUSTERS_ACTIVE 100
 
@@ -101,6 +102,13 @@ void nro_assignsyms(void* base)
             else if (!strncmp(demangled, "`vtable for'", 12))
             {
                 import_size = 0x1000;
+            }
+            else if (demangled_str == "lib::Singleton<app::BattleObjectWorld>::instance_"
+                     || demangled_str == "lib::Singleton<app::FighterManager>::instance_"
+                     || demangled_str == "lib::Singleton<app::BattleObjectManager>::instance_"
+                     || demangled_str == "lib::Singleton<app::FighterCutInManager>::instance_")
+            {
+                import_size = 0x100;
             }
             
             uint64_t addr = IMPORTS + (imports_size + import_size);
@@ -220,6 +228,11 @@ typedef struct cluster_struct
     uint64_t funcptr;
 } cluster_struct;
 
+void transpile_thread(LuaTranspiler* transpiler)
+{
+    delete transpiler;
+}
+
 void cluster_oncomplete(ClusterManager* cluster, uint64_t ret, void* data)
 {
     char tmp[256];
@@ -259,6 +272,7 @@ void cluster_oncomplete(ClusterManager* cluster, uint64_t ret, void* data)
     
     std::string dir_out = outdir + "/" + agent_name;
     std::string file_out = dir_out + "/" + func_name + ".txt";
+    std::string file_out_lua = dir_out + "/" + func_name + ".lc";
     try 
     {
         std::filesystem::create_directories(dir_out);
@@ -272,11 +286,14 @@ void cluster_oncomplete(ClusterManager* cluster, uint64_t ret, void* data)
     
     clusters_active--;
     
+    std::thread transpile(transpile_thread, new LuaTranspiler(file_out_lua, cluster->tokens, funcptr));
+    transpile.detach();
+    
     delete vals;
     delete cluster;
 }
 
-void cluster_work(ClusterManager* cluster, std::string outdir, uint64_t l2cagent, uint64_t funcptr, uint64_t hash)
+void cluster_work(ClusterManager* cluster, std::string character, std::string outdir, uint64_t l2cagent, uint64_t funcptr, uint64_t hash)
 {
     std::string out = "";
 
@@ -319,9 +336,25 @@ void cluster_work(ClusterManager* cluster, std::string outdir, uint64_t l2cagent
     t->join();
     delete t;*/
     
+    uint64_t x1, x2;
+    
+    
     ClusterManager* clone = new ClusterManager(cluster);
     clusters_active++;
-    std::thread* t = clone->execute_threaded(funcptr, cluster_oncomplete, vals, true, true, l2cagent, 0xFFFA000000000000);
+    
+    if (!strncmp(agent_name.c_str() + character.size() + 1, "ai_mode", 7))
+    {
+        //TODO: some sorta registration for these input vars
+        x1 = clone->heap_alloc(0x10);
+        x2 = clone->heap_alloc(0x10);
+    }
+    else
+    {
+        x1 = 0xFFFA000000000000;
+        x2 = 0xFFFA000000000000;
+    }
+    
+    std::thread* t = clone->execute_threaded(funcptr, cluster_oncomplete, vals, true, true, l2cagent, x1, x2);
     t->detach();
     delete t;
 }
@@ -468,8 +501,9 @@ int main(int argc, char **argv, char **envp)
   
         //if (funcptr == 0x1000cb3b0)
         //if (funcptr == 0x1000cc6d0)
+        //if (l2cagents_rev[l2cagent] == "wolf_ai_mode")
         {
-            cluster_work(&cluster, std::string(argv[2]), l2cagent, funcptr, hash);
+            cluster_work(&cluster, character, std::string(argv[2]), l2cagent, funcptr, hash);
         }
     }
     

@@ -42,6 +42,8 @@ private:
     uint64_t start_addr = 0;
     uint64_t end_addr = 0;
     uint64_t outputted_tokens = 0;
+    uint64_t fork_addr = 0;
+    int watching_fork = 0;
     
     bool slow;
     bool uc_term;
@@ -63,6 +65,11 @@ public:
     ClusterManager* get_cluster()
     {
         return cluster;
+    }
+    
+    uint64_t get_fork_addr()
+    {
+        return fork_addr;
     }
     
     int cluster_id();

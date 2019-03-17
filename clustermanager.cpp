@@ -174,7 +174,7 @@ void ClusterManager::clean_and_verify_blocks(uint64_t func, bool is_noreturn)
             if (t.str != "BLOCK_MERGE" && t.str != "SPLIT_BLOCK_MERGE" && t.str != "DIV_TRUE" && t.str != "SUB_RET")
             {
                 if (addr_in_token[t.pc])
-                    printf_warn("Token address overlap at %" PRIx64 " in block %" PRIx64 "\n", t.pc, b);
+                    printf_warn("Token address overlap at %" PRIx64 " in block %" PRIx64 "\n", t.pc, block_hash(b));
 
                 addr_in_token[t.pc] = true;
             }
@@ -215,7 +215,7 @@ void ClusterManager::clean_and_verify_blocks(uint64_t func, bool is_noreturn)
         {
             //printf("%llx %llx\n", blocks[b].addr, blocks[b].addr_end);
             if (addr_in_block[i])
-                printf_warn("Address range overlap at %" PRIx64 " in block %" PRIx64 "\n", i, b);
+                printf_warn("Address range overlap at %" PRIx64 " in block %" PRIx64 "\n", i, block_hash(b));
 
             addr_in_block[i] = true;
         }
@@ -223,11 +223,11 @@ void ClusterManager::clean_and_verify_blocks(uint64_t func, bool is_noreturn)
         // With is_noreturn, one missing exit token is permitted.
         if (!num_jumps && !is_noreturn)
         {
-            printf_warn("Block %" PRIx64 " is missing an exit token!\n", b);
+            printf_warn("Block %" PRIx64 " is missing an exit token!\n", block_hash(b));
             is_noreturn = false;
         }
         else if (num_jumps > 1)
-            printf_warn("Block %" PRIx64 " has too many exit tokens!\n", b);
+            printf_warn("Block %" PRIx64 " has too many exit tokens!\n", block_hash(b));
         
         std::sort(block_list.begin(), block_list.end(), std::greater<int>()); 
     }
@@ -466,14 +466,16 @@ void ClusterManager::split_block(uint64_t block, uint64_t addr)
             //printf("a ");
             //token.print();
         }
-        else if (token.pc >= b.addr && token.pc < b.addr_end)
+        else if ((token.pc >= b.addr && token.pc < b.addr_end) 
+                 || ((token.str == "BLOCK_MERGE" || token.str == "SPLIT_BLOCK_MERGE") 
+                     && token.pc == b.addr_end))
         {
             tokens[addr].insert(token);
             
             //printf("b ");
             //token.print();
         }
-        else if (!((token.str == "BLOCK_MERGE" || token.str == "SPLIT_BLOCK_MERGE") && token.pc == b.addr_end))
+        else
         {
             printf_error("Cluster Manager: Failed to assign token at %" PRIx64 " during split!\n%s", token.pc, token.to_string(this));
         }
@@ -506,6 +508,7 @@ bool ClusterManager::convergable_block(uint64_t block, std::vector<int> comp)
 
 uint64_t ClusterManager::block_hash(uint64_t addr)
 {
+    return addr;
     uint32_t crc = 0;
     for (auto& token : tokens[addr])
     {

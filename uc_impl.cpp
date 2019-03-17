@@ -266,13 +266,16 @@ void hook_code(uc_engine *uc, uint64_t address, uint32_t size, ClusterManager* c
 
 void hook_import(uc_engine *uc, uint64_t address, uint32_t size, ClusterManager* cluster)
 {
-    uint64_t origin;
+    uint64_t origin, origin_block;
     std::string name = unresolved_syms_rev[address];
     EmuInstance* inst = cluster->get_running_inst();
     inst->regs_invalidate();
     
     origin = inst->get_jump_history();
-    printf_verbose("Instance Id %u: Import '%s' from %" PRIx64 ", size %x, block %" PRIx64 "\n", inst->get_id(), name.c_str(), origin, size, inst->get_last_block());
+    origin_block = cluster->find_containing_block(origin);
+    if (!origin_block)
+        origin_block = inst->get_last_block();
+    printf_verbose("Instance Id %u: Import '%s' from %" PRIx64 ", size %x, block %" PRIx64 "\n", inst->get_id(), name.c_str(), origin, size, origin_block);
     cluster->invalidate_blocktree(inst, inst->get_current_block());
     
     // Add token
@@ -320,9 +323,9 @@ void hook_import(uc_engine *uc, uint64_t address, uint32_t size, ClusterManager*
             printf_debug("Instance Id %u: Found convergence at %" PRIx64 ", outputted %u tokens\n", inst->get_id(), origin, inst->num_outputted_tokens());
             
             //TODO: split blocks
-            if (inst->get_last_block() != term_block)
+            if (origin_block != term_block)
             {
-                printf_warn("Instance Id %u: Convergence block is not the same as current block (%" PRIx64 ", %" PRIx64 ")...\n", inst->get_id(), inst->get_last_block(), term_block);
+                printf_warn("Instance Id %u: Convergence block is not the same as current block (%" PRIx64 ", %" PRIx64 ")...\n", inst->get_id(), origin_block, term_block);
             }
             
             token.str = "CONV";
@@ -330,11 +333,11 @@ void hook_import(uc_engine *uc, uint64_t address, uint32_t size, ClusterManager*
             
             token.args.push_back(origin);
             token.args.push_back(term_block);
-            //token.args.push_back(next_closest_block(inst->get_last_block(), origin));
+            //token.args.push_back(next_closest_block(origin_block, origin));
             
             // Sometimes we get branches which just do nothing, pretend they don't exist
             if (inst->num_outputted_tokens())
-                cluster->add_token_by_prio(inst->get_last_block(), token);
+                cluster->add_token_by_prio(origin_block, token);
             inst->terminate();
             return;
         }
@@ -427,12 +430,16 @@ void hook_import(uc_engine *uc, uint64_t address, uint32_t size, ClusterManager*
         uint64_t funcptr = args[3];
         
         uint64_t statusconcat = a->raw << 32 | b->raw;
-        std::string kind = fighter_status_kind[a->raw + 1];
-        std::string func = status_func[b->raw];
+        std::string kind;
+        std::string func;
         if ((a->raw + 1) >= 0x1A6)
             kind = std::to_string(a->raw);
+        else
+            kind = fighter_status_kind[a->raw + 1];
         if (b->raw >= 23)
             func = std::to_string(b->raw);
+        else
+            func = status_func[b->raw];
 
         std::string func_str = kind + "__" + func;
         status_funcs[statusconcat] = func_str;
@@ -777,7 +784,7 @@ void hook_import(uc_engine *uc, uint64_t address, uint32_t size, ClusterManager*
         else
         {
             if (add_token)
-                cluster->add_subreplace_token(inst, inst->get_last_block(), token);
+                cluster->add_subreplace_token(inst, origin_block, token);
             add_token = false;
 
             inst->regs_cur.x0 = 1;
@@ -811,7 +818,7 @@ void hook_import(uc_engine *uc, uint64_t address, uint32_t size, ClusterManager*
     inst->regs_flush();
     
     if (add_token)
-        cluster->add_subreplace_token(inst, inst->get_last_block(), token);
+        cluster->add_subreplace_token(inst, origin_block, token);
 
     inst->pop_block();
 }
@@ -854,7 +861,7 @@ void hook_memrw(uc_engine *uc, uc_mem_type type, uint64_t addr, int size, int64_
             if (addr >= unresolved_syms["phx::detail::CRC32Table::table_"] && addr < unresolved_syms["phx::detail::CRC32Table::table_"] + sizeof(crc32_tab))
             {
                 crcidx = (addr - unresolved_syms["phx::detail::CRC32Table::table_"]) / 4;
-                uc_print_regs(uc);
+                //uc_print_regs(uc);
                 
                 //printf("idx %x accessed\n", crcidx);
                 

@@ -72,6 +72,7 @@ EmuInstance::EmuInstance(ClusterManager* parent_cluster, EmuInstance* to_clone, 
     reg_history = to_clone->reg_history;
     jump_history = to_clone->jump_history;
     regs_cur = to_clone->regs_cur;
+    fork_addr = get_pc() - 4;
 
     uc_insts_active++;
     uc_memory_use += STACK_SIZE + HEAP_SIZE;
@@ -128,9 +129,7 @@ void EmuInstance::forks_complete()
 
 void EmuInstance::fork_inst()
 {
-    if (is_term()) return;
-    
-    //TODO: link back to where the fork spawned from
+    if (is_term() || watching_fork) return;
 
     regs_invalidate();
     EmuInstance* fork = new EmuInstance(cluster, this, this);
@@ -139,12 +138,14 @@ void EmuInstance::fork_inst()
 
     printf_verbose("Instance Id %u forked to Instance Id %u, start=%llx, end=%llx\n", get_id(), fork->get_id(), fork->get_start_addr(), fork->get_end_addr());
     forks.push_back(fork);
+    
+    watching_fork = fork->get_id();
 }
 
 uc_err EmuInstance::uc_run_slice()
 {
     uc_err err;
-    uint64_t start_pc, start_lr, start_sp;
+    uint64_t start_pc = 0, start_lr = 0, start_sp = 0;
     
     regs_flush();
     start_pc = get_pc();
@@ -188,12 +189,14 @@ uc_err EmuInstance::uc_run_slice()
             token.str = "DIV_FALSE";
             token.type = L2C_TokenType_Meta;
             token.args.push_back(get_pc());
+            token.args.push_back(fork->get_fork_addr());
             cluster->add_token_by_prio(get_current_block(), token);
             
             token.str = "DIV_TRUE";
             token.type = L2C_TokenType_Meta;
             token.args.clear();
             token.args.push_back(fork->get_pc());
+            token.args.push_back(fork->get_fork_addr());
             cluster->add_token_by_prio(get_current_block(), token);
             
             cluster->set_fork_origin(reg_history[1].pc);
@@ -213,12 +216,19 @@ uc_err EmuInstance::uc_run_slice()
             // and the DIV_FALSE path just wraps back around
             if (cluster->convergable_block(get_current_block(), get_fork_hierarchy()))
             {
-                printf_debug("Instance Id %u: Found fork block convergence at %" PRIx64 ", outputted %u tokens\n", get_id(), start_pc, num_outputted_tokens());
+                printf_debug("Instance Id %u: Found fork block convergence at %" PRIx64 ", outputted %u tokens\n", get_id(), get_pc(), num_outputted_tokens());
                 uc_term = true;
                 return err;
             }
+
+            if (cluster->convergable_block(fork->get_current_block(), fork->get_fork_hierarchy()))
+            {
+                printf_debug("Instance Id %u: Found fork block convergence at %" PRIx64 ", outputted %u tokens\n", fork->get_id(), fork->get_pc(), fork->num_outputted_tokens());
+                fork->terminate();
+            }
             
             placed_fork = true;
+            watching_fork = 0;
         }
         else
         {
@@ -275,7 +285,8 @@ uc_err EmuInstance::uc_run_slice()
 
     if (slow && !placed_fork
         && cluster->blocks[start_pc].type != L2C_CodeBlockType_Invalid
-        && start_pc != get_current_block())
+        && start_pc != get_current_block()
+        && get_start_addr() && !watching_fork)
     {
         printf_verbose("Instance Id %u: Crossed a block boundary at %" PRIx64 "! current_block=%" PRIx64 " creator=%i, type=%i\n", get_id(), start_pc, get_current_block(), cluster->blocks[start_pc].creator(), cluster->blocks[start_pc].type);
 
@@ -289,7 +300,12 @@ uc_err EmuInstance::uc_run_slice()
         token.str = "BLOCK_MERGE";
         token.type = L2C_TokenType_Meta;
         token.args.push_back(start_pc);
-        cluster->add_token_by_prio(get_current_block(), token);
+        if (!cluster->is_fork_origin(reg_history[1].pc))
+        {
+            uint64_t block = get_current_block();
+            cluster->remove_block_matching_tokens(block, cluster->blocks[block].addr_end, "SPLIT_BLOCK_MERGE");
+            cluster->add_token_by_prio(get_current_block(), token);
+        }
 
         if (get_current_block_type() == L2C_CodeBlockType_Fork || get_current_block_type() == L2C_CodeBlockType_Goto)
             pop_block(true);
